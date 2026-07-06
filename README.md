@@ -28,7 +28,20 @@ Requirements: `podman`, `python3`, `curl`, and the system-installed `pi` /
 - **Linux:** rootless podman with `uidmap` installed (`sudo apt-get install -y
   uidmap`). On ZFS, also `fuse-overlayfs`. `build-and-install` checks for these.
 - **macOS:** podman via Homebrew. `build-and-install` creates and starts a
-  `podman machine` VM automatically if one isn't running.
+  `podman machine` VM automatically if one isn't running. Behind a
+  TLS-intercepting corporate proxy (e.g. a corporate TLS-inspecting proxy), it also prefetches the
+  ONNX Runtime and trusts the corporate CA in the build (see below).
+
+### Corporate TLS-intercepting proxies
+
+Some networks (e.g. a corporate TLS-inspecting proxy) MITM outbound HTTPS. This breaks two
+build-time downloads that don't use the system trust store: rustup's installer
+and `ort`'s ONNX Runtime fetch. On macOS `build-and-install` handles both
+automatically — it trusts the corporate CA (from the System keychain) inside
+the build container and prefetches the ONNX Runtime on the host (which already
+trusts the CA). On Linux behind such a proxy, pass `TOKEN_SAVER_CORP_CA=<pem>`
+and `TOKEN_SAVER_ORT_PREFETCH=1`. Runtime LLM traffic is unaffected as long as
+the provider endpoint isn't itself MITM'd.
 
 ## How it works
 
@@ -73,9 +86,17 @@ openai-completions provider and pi's spawned subagents.
 Sets `HTTP(S)_PROXY`/`ALL_PROXY` to the mitm sidecar. hermes builds an SSL
 context from `HERMES_CA_BUNDLE`/`SSL_CERT_FILE` that *replaces* the system
 roots, so the wrapper points those (and `REQUESTS_CA_BUNDLE`/`CURL_CA_BUNDLE`)
-at a combined bundle = system roots + mitm CA, sourced from hermes's own
-`certifi`. This covers the main model client, moa members/aggregator, and
-auxiliary calls in one shot.
+at a combined bundle = system roots + any corporate bundle + mitm CA, sourced
+from hermes's own `certifi`. This covers the main model client, moa
+members/aggregator, and auxiliary calls in one shot.
+
+Some hermes builds (e.g. the `custom-hermes-fork` fork behind a corporate-proxy-style
+corporate proxy) pin `SSL_CERT_FILE` to their own corporate CA bundle in
+`$HERMES_HOME/.env`, which is loaded *after* our environment and so overrides
+it. When the wrapper detects such a pinned bundle it adds the mitm CA into that
+file inside a clearly-marked, idempotent block — the only way to reach hermes's
+default clients — never removing the user's certs. `token-saver-ctl destroy`
+removes that block again.
 
 Caveats:
 - `HTTP(S)_PROXY` is inherited by subprocesses the tools spawn (that's what

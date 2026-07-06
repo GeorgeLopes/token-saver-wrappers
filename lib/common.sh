@@ -251,6 +251,21 @@ ts_ensure_hermes_ca_trust() {
     done < <(ts_hermes_ca_bundles | sort -u)
 }
 
+# Remove the token-saver-managed mitm CA block from any hermes CA bundle we
+# modified. Called on teardown so we leave the user's bundles as we found them.
+ts_remove_hermes_ca_trust() {
+    local b
+    while IFS= read -r b; do
+        b="${b/#\~/$HOME}"
+        [ -n "$b" ] && [ -f "$b" ] && [ -w "$b" ] || continue
+        grep -qF "$TS_CA_MARKER" "$b" 2>/dev/null || continue
+        local tmp; tmp="$(mktemp)"
+        sed "/${TS_CA_MARKER}/,/${TS_CA_MARKER_END}/d" "$b" > "$tmp" && cat "$tmp" > "$b"
+        rm -f "$tmp"
+        ts_log "removed mitm CA from hermes CA bundle $b"
+    done < <(ts_hermes_ca_bundles | sort -u)
+}
+
 ts_wait_ca() {
     local timeout="${1:-30}" waited=0
     while [ ! -s "$TS_CA_CERT" ]; do
