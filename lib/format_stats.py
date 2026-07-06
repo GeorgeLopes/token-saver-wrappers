@@ -55,6 +55,8 @@ def main() -> None:
 
     reqs = int(_num(s.get("api_requests")))
     model = s.get("primary_model") or "—"
+    if str(model).lower() == "unknown":
+        model = "—"
     before = _num(comp.get("total_tokens_before_with_cli_filtering"))
     saved = _num(comp.get("total_tokens_removed"))
     saved_pct = _pct(saved, before)
