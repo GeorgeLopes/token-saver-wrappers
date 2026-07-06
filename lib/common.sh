@@ -291,7 +291,21 @@ ts_ensure_machine() {
 ts_ensure_pod() {
     local with_mitm="${1:-}"
     ts_ensure_machine
-    ts_pod_exists || ts_create_pod
+    if ts_pod_exists; then
+        # An existing pod may be stopped (after a reboot or `token-saver-ctl
+        # stop`). Start the whole pod so its infra container comes up FIRST —
+        # starting an individual app container while the pod infra is stopped
+        # fails with "cannot get namespace path ... container is stopped". If
+        # the pod is wedged in a partial/broken state, recreate it (the CA and
+        # workspace live in host-mounted volumes, so nothing is lost).
+        if ! ts_podman pod start "$TS_POD" >/dev/null 2>&1; then
+            ts_log "pod $TS_POD would not start cleanly; recreating"
+            ts_podman pod rm -f "$TS_POD" >/dev/null 2>&1 || true
+            ts_create_pod
+        fi
+    else
+        ts_create_pod
+    fi
     ts_start_headroom
     [ "$with_mitm" = "with-mitm" ] && ts_start_mitm
     ts_wait_headroom_ready 180 \
