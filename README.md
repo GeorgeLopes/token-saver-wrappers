@@ -1,9 +1,10 @@
 # token-saver-wrappers
 
 Token-saving wrappers for AI coding harnesses. `pi-token-saver`,
-`hermes-token-saver`, `claude-token-saver`, and `codex-token-saver` behave
-exactly like `pi`, `hermes`, `claude` (Claude Code), and `codex` (OpenAI
-Codex), except every LLM API request passes through a local
+`hermes-token-saver`, `claude-token-saver`, `codex-token-saver`, and
+`opencode-token-saver` behave exactly like `pi`, `hermes`, `claude` (Claude
+Code), `codex` (OpenAI Codex), and `opencode`, except every LLM API request
+passes through a local
 [headroom](https://github.com/chopratejas/headroom) compression proxy —
 **without touching any tool's real configuration**. Headroom compresses tool
 outputs / context before they reach the provider (and keeps a local reversible
@@ -26,7 +27,7 @@ and the commands `pi-token-saver`, `hermes-token-saver`, `token-saver-ctl` to
 `~/.local/bin/`.
 
 Requirements: `podman`, `python3`, `curl`, and whichever of the wrapped
-commands you use (`pi`, `hermes`, `claude`, `codex`).
+commands you use (`pi`, `hermes`, `claude`, `codex`, `opencode`).
 - **Linux:** rootless podman with `uidmap` installed (`sudo apt-get install -y
   uidmap`). On ZFS, also `fuse-overlayfs`. `build-and-install` checks for these.
 - **macOS:** podman via Homebrew. `build-and-install` creates and starts a
@@ -47,7 +48,7 @@ the provider endpoint isn't itself MITM'd.
 
 ## How it works
 
-Both wrappers ensure a shared podman pod (`token-saver`) is running, then exec
+Every wrapper ensures a shared podman pod (`token-saver`) is running, then execs
 the real command with environment-only overrides. The pod stays up after the
 session ends (stop it with `token-saver-ctl stop`).
 
@@ -57,17 +58,20 @@ pod "token-saver"
 └── mitm       127.0.0.1:8790  (mitmproxy sidecar)
 ```
 
-Both wrappers use the **same mechanism**: a mitmproxy sidecar intercepts the
-known LLM API hosts and rewrites OpenAI-style `…/chat/completions` requests to
-headroom, which compresses and forwards to the real upstream — preserving your
-API key and any custom auth headers. This is provider-agnostic: it works with
+The `pi`, `hermes`, and `opencode` wrappers use the **same mechanism**: a
+mitmproxy sidecar intercepts the known LLM API hosts and rewrites OpenAI-style
+`…/chat/completions` requests to headroom, which compresses and forwards to the
+real upstream — preserving your API key and any custom auth headers. (The
+`claude` and `codex` wrappers instead redirect via a shadow config dir; see
+their sections below.) The mitm approach is provider-agnostic: it works with
 built-in providers (deepseek, openrouter, …) and with **custom endpoints**
 (e.g. an internal GenAI platform configured via `baseUrl`/`base_url`) alike.
 
 1. On each launch the wrapper regenerates an intercept-host list from the
    built-in openai-completions provider endpoints plus the hosts found in the
    tool's own config — `~/.pi/agent/models.json` for pi, `~/.hermes/config.yaml`
-   for hermes (loopback hosts excluded).
+   for hermes, and opencode's `opencode.json`/`opencode.jsonc`
+   (`provider.<name>.options.baseURL`) for opencode (loopback hosts excluded).
 2. mitmproxy TLS-intercepts **only** those hosts; every other host is tunneled
    untouched (no TLS termination). The locally generated mitm CA is trusted per
    process via env only — nothing is installed system-wide.
@@ -107,6 +111,29 @@ Caveats:
 - Endpoints on `localhost`/`127.0.0.1` are intentionally **not** intercepted
   (excluded from the host list and via `NO_PROXY`); a local model server is
   used directly, uncompressed.
+
+### opencode-token-saver
+
+opencode is a Bun binary whose provider requests go through Bun's global
+`fetch`, which honors `HTTP(S)_PROXY` and `NODE_EXTRA_CA_CERTS`. So — exactly
+like pi — the wrapper sets `HTTP(S)_PROXY`/`ALL_PROXY` to the mitm sidecar and
+`NODE_EXTRA_CA_CERTS` to the mitm CA, and the sidecar rewrites
+`…/chat/completions` to headroom. This covers **custom openai-compatible
+providers** (`provider.<name>` with `npm: "@ai-sdk/openai-compatible"` and an
+`options.baseURL`, e.g. an internal GenAI platform) and any built-in
+openai-completions provider. No config is rewritten, so a plain `opencode` is
+unaffected and this works from any directory.
+
+The wrapper finds the opencode binary on `PATH` or at
+`~/.opencode/bin/opencode` (its installer's location), and regenerates the
+intercept-host list from opencode's merged config: the global
+`opencode.json`/`opencode.jsonc`, any `$OPENCODE_CONFIG`, and project-level
+`./opencode.json(c)` and `./.opencode/opencode.json(c)`.
+
+Note: only providers speaking the OpenAI `…/chat/completions` dialect are
+compressed. opencode's built-in `openai` provider (Responses API) and
+`anthropic` provider (`/v1/messages`) are tunneled untouched — matching the
+scope of the pi wrapper.
 
 ### claude-token-saver
 
@@ -150,11 +177,12 @@ shapes are handled:
 ## Commands
 
 ```sh
-pi-token-saver     [any pi args...]
-hermes-token-saver [any hermes args...]
-claude-token-saver [any claude args...]
-codex-token-saver  [any codex args...]
-token-saver-ctl    status|start|stop|restart|destroy|logs [mitm]|stats [--full-raw-json]
+pi-token-saver       [any pi args...]
+hermes-token-saver   [any hermes args...]
+claude-token-saver   [any claude args...]
+codex-token-saver    [any codex args...]
+opencode-token-saver [any opencode args...]
+token-saver-ctl      status|start|stop|restart|destroy|logs [mitm]|stats [--full-raw-json]
 ```
 
 `token-saver-ctl stats` prints a readable token-savings summary (add
@@ -171,7 +199,7 @@ http://127.0.0.1:<port>/dashboard while the pod runs (the port is shown by
 | `TOKEN_SAVER_HEADROOM_PORT` | `8787` | headroom host port (127.0.0.1) |
 | `TOKEN_SAVER_MITM_PORT` | `8790` | mitm sidecar host port (127.0.0.1) |
 | `TOKEN_SAVER_OPENAI_UPSTREAM` | `https://api.deepseek.com` | fallback upstream for OpenAI requests that lack an `x-headroom-base-url` header (normal traffic always carries one) |
-| `TOKEN_SAVER_PI_BIN` / `TOKEN_SAVER_HERMES_BIN` | from `PATH` | real binary to exec |
+| `TOKEN_SAVER_PI_BIN` / `TOKEN_SAVER_HERMES_BIN` / `TOKEN_SAVER_OPENCODE_BIN` | from `PATH` (opencode also falls back to `~/.opencode/bin/opencode`) | real binary to exec |
 
 Port/upstream changes take effect on pod (re)creation: `token-saver-ctl destroy`
 then rerun a wrapper.

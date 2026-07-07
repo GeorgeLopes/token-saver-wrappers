@@ -5,7 +5,9 @@ openai-completions provider endpoints plus every provider/model baseUrl found
 in the config files passed as arguments. Loopback hosts are excluded (they are
 covered by NO_PROXY and must never be re-routed into the pod).
 
-Each argument is a config file:
+Each argument is a config file, dispatched by basename/extension:
+  opencode.json / opencode.jsonc — an opencode config (provider.<name>.options
+      .baseURL/.endpoint; comments tolerated)
   *.json  — a pi models.json (providers[].baseUrl + providers[].models[].baseUrl)
   *.yaml/*.yml — a hermes config.yaml (any base_url: value; scanned as URLs)
 
@@ -15,6 +17,7 @@ Usage: python3 gen_intercept_hosts.py [config-file ...]
 from __future__ import annotations
 
 import json
+import os
 import re
 import sys
 from urllib.parse import urlsplit
@@ -105,7 +108,68 @@ def _yaml_hosts(path: str) -> set[str]:
     return hosts
 
 
+_JSONC_TRAILING_COMMA = re.compile(r",(\s*[}\]])")
+# Matches, in order: a full JSON string literal (with escapes), a // line
+# comment, or a /* block */ comment. Strings are matched first so that `//`
+# inside a value (e.g. "https://…") is never mistaken for a comment.
+_JSONC_TOKEN = re.compile(
+    r'"(?:\\.|[^"\\])*"' r"|//[^\n\r]*" r"|/\*.*?\*/",
+    re.DOTALL,
+)
+# Keys under which opencode nests a provider endpoint URL (AI SDK options).
+_URL_KEYS = {"baseurl", "endpoint", "url"}
+
+
+def _strip_jsonc(text: str) -> str:
+    # Remove // and /* */ comments and trailing commas so opencode's JSONC
+    # parses with the stdlib json module. String literals are preserved intact
+    # so a `//` inside a URL value is not mistaken for a comment.
+    def repl(m: re.Match) -> str:
+        tok = m.group(0)
+        return tok if tok.startswith('"') else ""
+
+    text = _JSONC_TOKEN.sub(repl, text)
+    text = _JSONC_TRAILING_COMMA.sub(r"\1", text)
+    return text
+
+
+def _walk_urls(node: object) -> list[str]:
+    """Collect every string value stored under a URL-ish key, recursively."""
+    found: list[str] = []
+    if isinstance(node, dict):
+        for key, value in node.items():
+            if isinstance(value, str) and isinstance(key, str) and key.lower() in _URL_KEYS:
+                found.append(value)
+            else:
+                found += _walk_urls(value)
+    elif isinstance(node, list):
+        for item in node:
+            found += _walk_urls(item)
+    return found
+
+
+def _opencode_hosts(path: str) -> set[str]:
+    hosts: set[str] = set()
+    try:
+        with open(path, encoding="utf-8") as f:
+            config = json.loads(_strip_jsonc(f.read()))
+    except (OSError, ValueError):
+        return hosts
+    provider = config.get("provider") if isinstance(config, dict) else None
+    if not isinstance(provider, dict):
+        return hosts
+    # Only walk the provider subtree — never the top-level $schema URL etc.
+    for url in _walk_urls(provider):
+        h = host_of(url)
+        if h:
+            hosts.add(h)
+    return hosts
+
+
 def config_hosts(path: str) -> set[str]:
+    base = os.path.basename(path).lower()
+    if base in ("opencode.json", "opencode.jsonc"):
+        return _opencode_hosts(path)
     lower = path.lower()
     if lower.endswith(".json"):
         return _json_hosts(path)

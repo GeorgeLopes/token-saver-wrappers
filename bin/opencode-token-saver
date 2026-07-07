@@ -1,0 +1,56 @@
+#!/usr/bin/env bash
+# opencode-token-saver — run opencode with all its openai-compatible LLM traffic
+# routed through a local headroom compression proxy (podman pod), without
+# touching opencode's configuration.
+#
+# Wiring: opencode is a Bun binary whose provider requests go through Bun's
+# global fetch, which honors HTTP(S)_PROXY and NODE_EXTRA_CA_CERTS. So — exactly
+# like pi-token-saver — an mitmproxy sidecar (with a locally generated CA that
+# opencode trusts via NODE_EXTRA_CA_CERTS) intercepts the known LLM API hosts
+# and rewrites /chat/completions calls to headroom, which compresses and
+# forwards to the original upstream (preserving custom auth headers). Everything
+# else is tunneled untouched. No config is rewritten, so a plain `opencode` is
+# unaffected and this works from any directory, on both Linux and macOS.
+
+set -euo pipefail
+
+TOKEN_SAVER_HOME="${TOKEN_SAVER_HOME:-$HOME/.local/share/token-saver}"
+# shellcheck source=../lib/common.sh
+. "$TOKEN_SAVER_HOME/lib/common.sh"
+
+# opencode's official installer drops the binary at ~/.opencode/bin/opencode,
+# which is not always on PATH; fall back to it.
+OPENCODE_BIN="${TOKEN_SAVER_OPENCODE_BIN:-$(command -v opencode || true)}"
+[ -n "$OPENCODE_BIN" ] && [ -x "$OPENCODE_BIN" ] || OPENCODE_BIN="$HOME/.opencode/bin/opencode"
+[ -x "$OPENCODE_BIN" ] || ts_die "opencode not found on PATH or at ~/.opencode/bin/opencode. Install opencode first."
+
+# Regenerate the intercept host list from opencode's provider endpoints. Custom
+# providers put their baseURL in the config; built-in openai-completions
+# providers are covered by gen_intercept_hosts.py's built-in host list. We scan
+# the global config, any explicit $OPENCODE_CONFIG, and project-level configs in
+# the current directory (opencode merges all of these).
+oc_configs=()
+# Append $1 to oc_configs if it exists. Must return 0 even when absent, else
+# `set -e` would abort the wrapper on the first missing candidate.
+oc_add() { [ -f "$1" ] && oc_configs+=("$1"); return 0; }
+oc_add "${XDG_CONFIG_HOME:-$HOME/.config}/opencode/opencode.json"
+oc_add "${XDG_CONFIG_HOME:-$HOME/.config}/opencode/opencode.jsonc"
+[ -n "${OPENCODE_CONFIG:-}" ] && oc_add "$OPENCODE_CONFIG"
+oc_add "./opencode.json"
+oc_add "./opencode.jsonc"
+oc_add "./.opencode/opencode.json"
+oc_add "./.opencode/opencode.jsonc"
+# Expand safely even when no config files were found (bash 3.2 + set -u).
+ts_refresh_intercept_hosts ${oc_configs[@]+"${oc_configs[@]}"}
+
+ts_ensure_pod with-mitm
+
+exec env \
+    HTTP_PROXY="http://127.0.0.1:${TS_MITM_PORT}" \
+    HTTPS_PROXY="http://127.0.0.1:${TS_MITM_PORT}" \
+    http_proxy="http://127.0.0.1:${TS_MITM_PORT}" \
+    https_proxy="http://127.0.0.1:${TS_MITM_PORT}" \
+    NO_PROXY="localhost,127.0.0.1,::1" \
+    no_proxy="localhost,127.0.0.1,::1" \
+    NODE_EXTRA_CA_CERTS="$TS_CA_CERT" \
+    "$OPENCODE_BIN" "$@"

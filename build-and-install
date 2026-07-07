@@ -1,6 +1,7 @@
 #!/usr/bin/env bash
 # build-and-install — build the vendored headroom container image and install
-# the pi-token-saver / hermes-token-saver wrappers into ~/.local/bin.
+# the token-saver wrappers (pi / hermes / claude / codex / opencode) into
+# ~/.local/bin.
 #
 # Usage: ./build-and-install [--rebuild]
 #   --rebuild  force a rebuild of the headroom image even if it already exists
@@ -215,6 +216,7 @@ install -m 0755 "$REPO_DIR/bin/pi-token-saver" \
                 "$REPO_DIR/bin/hermes-token-saver" \
                 "$REPO_DIR/bin/claude-token-saver" \
                 "$REPO_DIR/bin/codex-token-saver" \
+                "$REPO_DIR/bin/opencode-token-saver" \
                 "$REPO_DIR/bin/token-saver-ctl" \
                 "$BIN_DIR/"
 
@@ -223,5 +225,5 @@ case ":$PATH:" in
     *) log "NOTE: $BIN_DIR is not on your PATH" ;;
 esac
 
-log "done. Commands available: pi-token-saver, hermes-token-saver, token-saver-ctl"
+log "done. Commands available: pi-token-saver, hermes-token-saver, claude-token-saver, codex-token-saver, opencode-token-saver, token-saver-ctl"
 log "headroom image: $IMAGE_TAG (from vendored commit $HEADROOM_COMMIT)"
