@@ -17,7 +17,7 @@ Commands:
   stop       Stop the pod (containers are kept for fast restart)
   restart    Stop then start
   destroy    Remove the pod and its containers entirely
-  logs       Tail headroom logs (use 'logs mitm' for the mitm sidecar)
+  logs       Tail headroom logs (use 'logs mitm' for the mitm sidecar, 'logs translate' for the translate proxy)
   stats      Show a token-savings summary (add --full-raw-json for the raw payload)
 EOF
     exit 1
@@ -35,6 +35,15 @@ case "${1:-}" in
             echo "headroom: ready on 127.0.0.1:$TS_HEADROOM_PORT"
         else
             echo "headroom: not responding on 127.0.0.1:$TS_HEADROOM_PORT"
+        fi
+        if [ "$TS_TRANSLATE_ENABLED" != "0" ] && [ "$TS_TRANSLATE_ENABLED" != "false" ] && [ "$TS_TRANSLATE_ENABLED" != "" ]; then
+            if ts_translate_ready; then
+                echo "translate: ready on 127.0.0.1:$TS_TRANSLATE_PORT (pt-BR ↔ EN)"
+            else
+                echo "translate: not responding on 127.0.0.1:$TS_TRANSLATE_PORT"
+            fi
+        else
+            echo "translate: disabled (set TOKEN_SAVER_TRANSLATE_ENABLED=1 to enable pt-BR ↔ EN)"
         fi
         ;;
     start)

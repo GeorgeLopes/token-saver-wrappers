@@ -55,8 +55,34 @@ session ends (stop it with `token-saver-ctl stop`).
 ```
 pod "token-saver"
 ├── headroom   127.0.0.1:8787  (built from vendor/headroom-src.tar.gz)
+├── translate  127.0.0.1:8786  (pt-BR ↔ EN, optional — enable with TOKEN_SAVER_TRANSLATE_ENABLED=1)
 └── mitm       127.0.0.1:8790  (mitmproxy sidecar)
 ```
+
+When the translate layer is enabled, the flow becomes:
+
+```
+tool → mitm → translate (pt→EN) → headroom (compress) → upstream
+tool ← mitm ← translate (EN→pt) ← headroom (unpack)  ← upstream
+```
+
+The translate proxy sits between mitmproxy and headroom, translating
+system/user messages from Portuguese to English before compression (English
+compresses better) and translating assistant responses back to Portuguese.
+This is especially effective for tools like `hermes` that send/receive large
+contexts in Portuguese — fewer tokens after translation means lower API costs.
+
+**Enable translate:**
+```sh
+export TOKEN_SAVER_TRANSLATE_ENABLED=1
+hermes-token-saver "faça uma code review do arquivo X"
+```
+
+The translate layer uses [deep-translator](https://pypi.org/project/deep-translator/)
+(Google Translate backend) and is built as a separate lightweight container image
+(`localhost/translate-token-saver:latest`). It only activates for
+`/v1/chat/completions` and `/v1/messages` endpoints on intercepted hosts;
+all other traffic passes through unchanged.
 
 The `pi`, `hermes`, and `opencode` wrappers use the **same mechanism**: a
 mitmproxy sidecar intercepts the known LLM API hosts and rewrites OpenAI-style
@@ -198,6 +224,9 @@ http://127.0.0.1:<port>/dashboard while the pod runs (the port is shown by
 | `TOKEN_SAVER_POD_NAME` | `token-saver` | podman pod name |
 | `TOKEN_SAVER_HEADROOM_PORT` | `8787` | headroom host port (127.0.0.1) |
 | `TOKEN_SAVER_MITM_PORT` | `8790` | mitm sidecar host port (127.0.0.1) |
+| `TOKEN_SAVER_TRANSLATE_PORT` | `8786` | translate proxy host port (127.0.0.1) |
+| `TOKEN_SAVER_TRANSLATE_ENABLED` | `0` | enable pt-BR ↔ EN translation layer (set to `1`) |
+| `TOKEN_SAVER_TRANSLATE_IMAGE` | `localhost/translate-token-saver:latest` | translate container image |
 | `TOKEN_SAVER_OPENAI_UPSTREAM` | `https://api.deepseek.com` | fallback upstream for OpenAI requests that lack an `x-headroom-base-url` header (normal traffic always carries one) |
 | `TOKEN_SAVER_PI_BIN` / `TOKEN_SAVER_HERMES_BIN` / `TOKEN_SAVER_OPENCODE_BIN` | from `PATH` (opencode also falls back to `~/.opencode/bin/opencode`) | real binary to exec |
 

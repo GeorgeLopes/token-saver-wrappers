@@ -17,6 +17,10 @@ import re
 from mitmproxy import ctx, http
 
 HEADROOM_PORT = int(os.environ.get("HEADROOM_INTERNAL_PORT", "8787"))
+# When TRANSLATE_PORT is set, mitm routes through the translate proxy first
+# (which then forwards to headroom), enabling pt-BR ↔ EN translation.
+TRANSLATE_PORT = os.environ.get("TRANSLATE_PORT")
+TARGET_PORT = int(TRANSLATE_PORT) if TRANSLATE_PORT else HEADROOM_PORT
 HOSTS_FILE = os.environ.get(
     "INTERCEPT_HOSTS_FILE", "/home/mitmproxy/.mitmproxy/intercept-hosts.txt"
 )
@@ -50,7 +54,8 @@ class TokenSaverRewrite:
             ctx.options.update(allow_hosts=[pattern])
             ctx.log.info(
                 f"token-saver: intercepting {len(self.hosts)} host(s); "
-                f"rewriting chat-completions to headroom :{HEADROOM_PORT}"
+                f"rewriting chat-completions to :{TARGET_PORT}"
+                f"{' (via translate)' if TRANSLATE_PORT else ''}"
             )
         else:
             # No hosts: never terminate TLS for anything.
@@ -80,9 +85,9 @@ class TokenSaverRewrite:
         flow.request.headers["x-headroom-original-path"] = bare_path
         flow.request.scheme = "http"
         flow.request.host = "127.0.0.1"
-        flow.request.port = HEADROOM_PORT
+        flow.request.port = TARGET_PORT
         flow.request.path = "/v1/chat/completions" + query
-        flow.request.host_header = f"127.0.0.1:{HEADROOM_PORT}"
+        flow.request.host_header = f"127.0.0.1:{TARGET_PORT}"
 
     def responseheaders(self, flow: http.HTTPFlow) -> None:
         # Stream SSE bodies through immediately — buffering would stall

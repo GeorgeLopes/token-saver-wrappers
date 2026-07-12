@@ -15,7 +15,10 @@ TS_PORTS_FILE="$TOKEN_SAVER_HOME/ports.env"
 [ -f "$TS_PORTS_FILE" ] && . "$TS_PORTS_FILE"
 TS_HEADROOM_PORT="${TOKEN_SAVER_HEADROOM_PORT:-${TS_HEADROOM_PORT:-8787}}"
 TS_MITM_PORT="${TOKEN_SAVER_MITM_PORT:-${TS_MITM_PORT:-8790}}"
+TS_TRANSLATE_PORT="${TOKEN_SAVER_TRANSLATE_PORT:-${TS_TRANSLATE_PORT:-8786}}"
+TS_TRANSLATE_ENABLED="${TOKEN_SAVER_TRANSLATE_ENABLED:-${TS_TRANSLATE_ENABLED:-0}}"
 TS_HEADROOM_INTERNAL_PORT=8787
+TS_TRANSLATE_INTERNAL_PORT=8786
 # Default upstream for OpenAI-dialect requests that do NOT carry an
 # x-headroom-base-url header (i.e. hermes traffic). pi traffic always carries
 # the header, so this only affects hermes.
@@ -27,6 +30,7 @@ TS_ANTHROPIC_UPSTREAM="${TOKEN_SAVER_ANTHROPIC_UPSTREAM:-https://api.anthropic.c
 
 TS_HEADROOM_IMAGE="${TOKEN_SAVER_HEADROOM_IMAGE:-localhost/headroom-token-saver:latest}"
 TS_MITM_IMAGE="${TOKEN_SAVER_MITM_IMAGE:-docker.io/mitmproxy/mitmproxy:12.1.2}"
+TS_TRANSLATE_IMAGE="${TOKEN_SAVER_TRANSLATE_IMAGE:-localhost/translate-token-saver:latest}"
 
 TS_MITM_DIR="$TOKEN_SAVER_HOME/mitm"
 TS_HEADROOM_DIR="$TOKEN_SAVER_HOME/headroom"
@@ -75,17 +79,17 @@ ts_pick_free_ports() {
     if [ -n "${TOKEN_SAVER_HEADROOM_PORT:-}" ] || [ -n "${TOKEN_SAVER_MITM_PORT:-}" ]; then
         return 0
     fi
-    local h="$TS_HEADROOM_PORT" m="$TS_MITM_PORT"
-    while ts_port_in_use "$h" || ts_port_in_use "$m"; do
-        h=$((h + 2)); m=$((m + 2))
+    local h="$TS_HEADROOM_PORT" m="$TS_MITM_PORT" t="$TS_TRANSLATE_PORT"
+    while ts_port_in_use "$h" || ts_port_in_use "$m" || ts_port_in_use "$t"; do
+        h=$((h + 3)); m=$((m + 3)); t=$((t + 3))
         [ "$h" -gt 8900 ] && ts_die "no free host port pair found near $TS_HEADROOM_PORT"
     done
     if [ "$h" != "$TS_HEADROOM_PORT" ]; then
-        ts_log "ports $TS_HEADROOM_PORT/$TS_MITM_PORT busy; using $h/$m"
+        ts_log "ports $TS_HEADROOM_PORT/$TS_MITM_PORT/$TS_TRANSLATE_PORT busy; using $h/$m/$t"
     fi
-    TS_HEADROOM_PORT="$h"; TS_MITM_PORT="$m"
+    TS_HEADROOM_PORT="$h"; TS_MITM_PORT="$m"; TS_TRANSLATE_PORT="$t"
     mkdir -p "$TOKEN_SAVER_HOME"
-    printf 'TS_HEADROOM_PORT=%s\nTS_MITM_PORT=%s\n' "$h" "$m" > "$TS_PORTS_FILE"
+    printf 'TS_HEADROOM_PORT=%s\nTS_MITM_PORT=%s\nTS_TRANSLATE_PORT=%s\n' "$h" "$m" "$t" > "$TS_PORTS_FILE"
 }
 
 ts_pod_exists()      { podman pod exists "$TS_POD" 2>/dev/null; }
@@ -114,6 +118,10 @@ ts_headroom_ready() {
     curl -fsS -o /dev/null --max-time 2 "http://127.0.0.1:${TS_HEADROOM_PORT}/readyz" 2>/dev/null
 }
 
+ts_translate_ready() {
+    curl -fsS -o /dev/null --max-time 2 "http://127.0.0.1:${TS_TRANSLATE_PORT}/readyz" 2>/dev/null
+}
+
 ts_wait_headroom_ready() {
     local timeout="${1:-180}" waited=0
     while ! ts_headroom_ready; do
@@ -127,10 +135,11 @@ ts_wait_headroom_ready() {
 
 ts_create_pod() {
     ts_pick_free_ports
-    ts_log "creating pod $TS_POD (headroom on 127.0.0.1:$TS_HEADROOM_PORT, mitm on 127.0.0.1:$TS_MITM_PORT)"
+    ts_log "creating pod $TS_POD (headroom on 127.0.0.1:$TS_HEADROOM_PORT, translate on 127.0.0.1:$TS_TRANSLATE_PORT, mitm on 127.0.0.1:$TS_MITM_PORT)"
     ts_podman pod create --name "$TS_POD" \
         --userns=keep-id \
         -p "127.0.0.1:${TS_HEADROOM_PORT}:${TS_HEADROOM_INTERNAL_PORT}" \
+        -p "127.0.0.1:${TS_TRANSLATE_PORT}:${TS_TRANSLATE_INTERNAL_PORT}" \
         -p "127.0.0.1:${TS_MITM_PORT}:${TS_MITM_PORT}" \
         >/dev/null
 }
@@ -172,6 +181,10 @@ ts_start_mitm() {
     fi
     [ -f "$TS_LIB_DIR/mitm_addon.py" ] || ts_die "mitm addon missing at $TS_LIB_DIR/mitm_addon.py. Run build-and-install."
     ts_log "starting mitm container"
+    local translate_env=()
+    if [ "$TS_TRANSLATE_ENABLED" != "0" ] && [ "$TS_TRANSLATE_ENABLED" != "false" ] && [ "$TS_TRANSLATE_ENABLED" != "" ]; then
+        translate_env=(-e "TRANSLATE_PORT=$TS_TRANSLATE_INTERNAL_PORT")
+    fi
     # Mount the confdir at a top-level path (not under the image's 0700
     # /home/mitmproxy, which the keep-id-remapped uid cannot traverse on
     # macOS) and pin mitmproxy's confdir to it, so the CA is written there and
@@ -183,6 +196,7 @@ ts_start_mitm() {
         -e "HOME=/mitm-confdir" \
         -e "INTERCEPT_HOSTS_FILE=/mitm-confdir/intercept-hosts.txt" \
         -e "HEADROOM_INTERNAL_PORT=$TS_HEADROOM_INTERNAL_PORT" \
+        "${translate_env[@]}" \
         --entrypoint mitmdump \
         "$TS_MITM_IMAGE" \
         --listen-host 0.0.0.0 --listen-port "$TS_MITM_PORT" \
@@ -191,6 +205,27 @@ ts_start_mitm() {
             --set connection_strategy=lazy \
             --set upstream_cert=false \
         >/dev/null
+}
+
+ts_start_translate() {
+    if [ "$TS_TRANSLATE_ENABLED" = "0" ] || [ "$TS_TRANSLATE_ENABLED" = "false" ] || [ "$TS_TRANSLATE_ENABLED" = "" ]; then
+        return 0
+    fi
+    if podman container exists "${TS_POD}-translate" 2>/dev/null; then
+        ts_container_runs "${TS_POD}-translate" && return 0
+        ts_podman start "${TS_POD}-translate" >/dev/null
+        return 0
+    fi
+    podman image exists "$TS_TRANSLATE_IMAGE" \
+        || ts_die "translate image $TS_TRANSLATE_IMAGE not found. Run build-and-install first."
+    ts_log "starting translate container (pt-BR ↔ EN)"
+    ts_podman run -d --pod "$TS_POD" --name "${TS_POD}-translate" \
+        --restart unless-stopped \
+        -e "TRANSLATE_ENABLED=1" \
+        -e "TRANSLATE_LISTEN_PORT=$TS_TRANSLATE_INTERNAL_PORT" \
+        -e "HEADROOM_PORT=$TS_HEADROOM_INTERNAL_PORT" \
+        -e "HEADROOM_HOST=127.0.0.1" \
+        "$TS_TRANSLATE_IMAGE" >/dev/null
 }
 
 # Restart mitm so it re-reads the intercept-hosts file.
@@ -346,10 +381,15 @@ ts_ensure_pod() {
     else
         ts_create_pod
     fi
+    # Start in order: headroom → translate → mitm (each depends on the previous)
     ts_start_headroom
-    [ "$with_mitm" = "with-mitm" ] && ts_start_mitm
     ts_wait_headroom_ready 180 \
         || ts_die "headroom did not become ready on 127.0.0.1:$TS_HEADROOM_PORT (podman logs ${TS_POD}-headroom)"
+    ts_start_translate
+    if [ "$TS_TRANSLATE_ENABLED" != "0" ] && [ "$TS_TRANSLATE_ENABLED" != "false" ] && [ "$TS_TRANSLATE_ENABLED" != "" ]; then
+        ts_translate_ready || ts_log "translate not ready on 127.0.0.1:$TS_TRANSLATE_PORT (starting up, may take a moment)"
+    fi
+    [ "$with_mitm" = "with-mitm" ] && ts_start_mitm
     if [ "$with_mitm" = "with-mitm" ]; then
         ts_wait_ca 30 || ts_die "mitmproxy CA was not generated at $TS_CA_CERT (podman logs ${TS_POD}-mitm)"
     fi

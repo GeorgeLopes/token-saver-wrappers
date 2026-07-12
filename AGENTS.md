@@ -44,6 +44,43 @@ providers. It does **NOT** work for the **Anthropic** handler, which forwards to
 a global `ANTHROPIC_TARGET_API_URL` fixed at pod creation — hence the claude
 wrapper must recreate the pod when the Anthropic upstream changes.
 
+## Translate layer (optional pt-BR ↔ EN)
+
+A **translate proxy** container (`localhost/translate-token-saver:latest`) can be
+inserted between mitmproxy and headroom to translate Portuguese messages to
+English before compression, and English responses back to Portuguese. Enable it
+with `TOKEN_SAVER_TRANSLATE_ENABLED=1`.
+
+**How it works:**
+- `lib/translate_proxy.py` — HTTP proxy (stdlib `http.server`, no framework deps)
+  that intercepts `/v1/chat/completions` and `/v1/messages`, translates
+  system/user `messages[].content` pt→EN (using `deep-translator` /
+  GoogleTranslator), forwards to headroom, then translates assistant
+  `choices[].message.content` EN→pt on the response.
+- `vendor/translate.Dockerfile` — `python:3.12-slim` + `deep-translator==1.11.4`.
+  Built by `build-and-install`. ~150MB.
+- The mitm addon (`lib/mitm_addon.py`) reads `TRANSLATE_PORT` env var; when set,
+  it routes chat-completions to the translate container instead of directly to
+  headroom. The translate container then forwards to headroom on port 8787.
+
+**Non-obvious traps:**
+- **Translation latency.** Each message round-trip adds 50–200ms per text block
+  (Google Translate API call). For streaming responses, the translate layer
+  passes SSE chunks through *without* translation (to preserve low latency),
+  then translates only the final aggregated response. This means streaming
+  users see English text during generation, with the final block in Portuguese.
+- **Language detection is heuristic.** `translate_proxy.py` uses regex patterns
+  (`PT_PATTERNS`) to detect Portuguese — accented chars and common PT words. It
+  errs on the side of NOT translating (false negatives are safer than translating
+  code/English prompts into broken Portuguese).
+- **deep-translator dependency.** The image must have internet access to reach
+  Google Translate's API. Behind a corporate proxy, the container inherits
+  `HTTP_PROXY`/`HTTPS_PROXY` from the pod (set them via the wrapper scripts).
+- **Translate container is opt-in.** Even when the image is built, the container
+  is only started when `TS_TRANSLATE_ENABLED` is truthy. The pod always exposes
+  the translate port, but without the container running, mitm routes directly
+  to headroom.
+
 ## Two routing mechanisms — pick the right one
 
 **1. mitm sidecar (pi, hermes, opencode).** Used when the tool honors

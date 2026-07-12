@@ -194,6 +194,16 @@ else
 fi
 podman tag "$IMAGE_TAG" localhost/headroom-token-saver:latest
 
+# --- build translate proxy image -----------------------------------------------
+TRANSLATE_IMAGE="localhost/translate-token-saver:latest"
+
+if [ "$REBUILD" = 1 ] || ! podman image exists "$TRANSLATE_IMAGE"; then
+    log "building $TRANSLATE_IMAGE"
+    podman build -t "$TRANSLATE_IMAGE" -f "$REPO_DIR/vendor/translate.Dockerfile" "$REPO_DIR"
+else
+    log "translate image $TRANSLATE_IMAGE already built (use --rebuild to force)"
+fi
+
 # --- pull mitmproxy sidecar image ---------------------------------------------
 if ! podman image exists "$MITM_IMAGE"; then
     log "pulling $MITM_IMAGE"
@@ -209,6 +219,7 @@ install -m 0644 "$REPO_DIR/lib/common.sh" \
                 "$REPO_DIR/lib/format_stats.py" \
                 "$REPO_DIR/lib/codex_shadow_config.py" \
                 "$REPO_DIR/lib/claude_shadow_settings.py" \
+                "$REPO_DIR/lib/translate_proxy.py" \
                 "$TOKEN_SAVER_HOME/lib/"
 
 log "installing wrappers to $BIN_DIR"
@@ -227,3 +238,4 @@ esac
 
 log "done. Commands available: pi-token-saver, hermes-token-saver, claude-token-saver, codex-token-saver, opencode-token-saver, token-saver-ctl"
 log "headroom image: $IMAGE_TAG (from vendored commit $HEADROOM_COMMIT)"
+log "translate image: $TRANSLATE_IMAGE (enable with TOKEN_SAVER_TRANSLATE_ENABLED=1)"
