@@ -77,18 +77,18 @@ HEADROOM_BASE = f"http://{HEADROOM_HOST}:{HEADROOM_PORT}"
 # ---------------------------------------------------------------------------
 @dataclass
 class ModuleStats:
-    requests: int = 0
-    tokens_saved_est: int = 0
+    total_requests: int = 0  # all requests through proxy
     cache_hits: int = 0
     cache_misses: int = 0
     summaries: int = 0
-    reroutes: int = 0  # router redirects to cheap model
-    total_requests: int = 0  # all requests through proxy
+    reroutes: int = 0
     strips_system: int = 0
     strips_tools: int = 0
     strips_response: int = 0
     translates_in: int = 0
     translates_out: int = 0
+    sse_passthrough: int = 0  # responses that skipped pipeline (streaming)
+    chars_reduced: int = 0  # total input chars reduced by all modules
 
 _stats = ModuleStats()
 _stats_lock = threading.Lock()
@@ -349,7 +349,7 @@ def summarize_conversation(messages: list) -> list:
 
             with _stats_lock:
                 _stats.summaries += 1
-                _stats.tokens_saved_est += (total_chars // 3) - (_estimate_tokens(summary) + len(new_messages) * 100)
+                _stats.chars_reduced += (total_chars // 3) - (_estimate_tokens(summary) + len(new_messages) * 100)
 
             print(f"[summarize] collapsed {len(messages)}→{len(new_messages)} msgs "
                   f"(~{total_chars // 3}→~{sum(_estimate_tokens(m.get('content','')) for m in new_messages)} tokens est)",
@@ -419,7 +419,7 @@ def strip_system_prompt(messages: list) -> list:
             saved = original_len - len(content)
             with _stats_lock:
                 _stats.strips_system += 1
-                _stats.tokens_saved_est += saved // 3
+                _stats.chars_reduced += saved // 3
             print(f"[strip_system] saved ~{saved // 3} tokens", file=sys.stderr, flush=True)
 
     return messages
@@ -478,7 +478,7 @@ def minify_tools(body: dict) -> dict:
     if new_chars < original_chars:
         with _stats_lock:
             _stats.strips_tools += 1
-            _stats.tokens_saved_est += (original_chars - new_chars) // 3
+            _stats.chars_reduced += (original_chars - new_chars) // 3
         print(f"[minify_tools] saved ~{(original_chars - new_chars) // 3} tokens", file=sys.stderr, flush=True)
 
     return body
@@ -571,7 +571,7 @@ def router_rewrite_body(body: dict) -> dict | None:
 
     with _stats_lock:
         _stats.reroutes += 1
-        _stats.tokens_saved_est += 5000  # rough estimate: cheap model is ~80% cheaper
+        _stats.chars_reduced += 5000  # rough estimate: cheap model is ~80% cheaper
 
     print(f"[router] {original_model}→{ROUTER_CHEAP_MODEL} ({reason})",
           file=sys.stderr, flush=True)
@@ -621,7 +621,7 @@ def strip_response(body: bytes) -> bytes:
         with _stats_lock:
             _stats.strips_response += 1
             if saved > 0:
-                _stats.tokens_saved_est += saved // 4  # conservative: ~4 chars/token
+                _stats.chars_reduced += saved // 4  # conservative: ~4 chars/token
         if saved > 0:
             print(f"[strip_response] removed {saved} bytes", file=sys.stderr, flush=True)
         return new_body
@@ -655,7 +655,7 @@ def translate_messages_in(messages: list) -> list:
                     msg["content"] = translated
                     with _stats_lock:
                         _stats.translates_in += 1
-                        _stats.tokens_saved_est += (len(content) - len(translated)) // 3
+                        _stats.chars_reduced += (len(content) - len(translated)) // 3
                     print(f"[translate] {role}: pt→EN", file=sys.stderr, flush=True)
         elif isinstance(content, list):
             for part in content:
@@ -788,6 +788,12 @@ def process_response(body: bytes, content_type: str, request_body: bytes, model:
     if not body:
         return body
 
+    # SSE streaming — skip pipeline, just count
+    if "text/event-stream" in content_type:
+        with _stats_lock:
+            _stats.sse_passthrough += 1
+        return body
+
     # 1. Translate EN→pt
     body = translate_response_out(body, content_type)
 
@@ -847,8 +853,8 @@ DASHBOARD_HTML = """<!DOCTYPE html>
     <div class="value">__TOTAL_REQUESTS__</div>
   </div>
   <div class="card">
-    <h3>Tokens Saved (est)</h3>
-    <div class="value">__TOKENS_SAVED__<span class="unit"> tokens</span></div>
+    <h3>Input Chars Reduced</h3>
+    <div class="value">__TOKENS_SAVED__<span class="unit"> chars</span></div>
   </div>
   <div class="card">
     <h3>Cache Hit Rate</h3>
@@ -898,14 +904,14 @@ def build_dashboard() -> bytes:
         ("minify_tools", s.strips_tools, f"{s.strips_tools} tool defs minified"),
         ("router", s.reroutes, f"{s.reroutes} rerouted to cheaper model"),
         ("translate", s.translates_in, f"{s.translates_in} in / {s.translates_out} out"),
-        ("strip_response", s.strips_response, f"{s.strips_response} responses stripped"),
+        ("strip_response", s.strips_response, f"{s.strips_response} responses / {s.sse_passthrough} SSE"),
     ]:
         rows += f"<tr><td>{name}</td><td>{count}</td><td>{detail}</td></tr>"
 
     html = DASHBOARD_HTML
     html = html.replace("__MODULES__", modules_html)
     html = html.replace("__TOTAL_REQUESTS__", str(s.total_requests))
-    html = html.replace("__TOKENS_SAVED__", f"{s.tokens_saved_est:,}")
+    html = html.replace("__TOKENS_SAVED__", f"{s.chars_reduced:,}")
     html = html.replace("__CACHE_HIT_RATE__", str(hit_rate))
     html = html.replace("__CACHE_ENTRIES__", str(cache["entries"]))
     html = html.replace("__MODULE_ROWS__", rows)
@@ -919,7 +925,7 @@ def build_stats_json() -> bytes:
     data = {
         "modules": ACTIVE_MODULES,
         "total_requests": s.total_requests,
-        "tokens_saved_est": s.tokens_saved_est,
+        "chars_reduced": s.chars_reduced,
         "cache": {
             "hits": s.cache_hits,
             "misses": s.cache_misses,
@@ -935,6 +941,7 @@ def build_stats_json() -> bytes:
             "translate_in": s.translates_in,
             "translate_out": s.translates_out,
             "strip_response": s.strips_response,
+            "sse_passthrough": s.sse_passthrough,
         },
     }
     return json.dumps(data, indent=2).encode()
