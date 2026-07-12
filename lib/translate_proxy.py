@@ -365,15 +365,26 @@ def summarize_conversation(messages: list) -> list:
 # Module 3: System prompt dedup
 # ---------------------------------------------------------------------------
 # Common repetitive patterns in coding agent system prompts
+# Hermes-specific patterns added after real-world testing (8 requests, 0 hits).
 DEDUP_PATTERNS = [
-    # Repeated "MUST" / "CRITICAL" / "IMPORTANT" admonitions
+    # Hermes: repeated tool-use enforcement (multiple variants)
+    (re.compile(r'(You MUST use your tools[^.]*\.)\s*(?=.*You MUST use your tools)', re.DOTALL), r'\1'),
+    (re.compile(r'(Keep working until the task is actually complete[^.]*\.)\s*(?=.*Keep working until the task)', re.DOTALL), r'\1'),
+    (re.compile(r'(Do not stop with a summary[^.]*\.)\s*(?=.*Do not stop)', re.DOTALL), r'\1'),
+    # Generic: repeated "MUST" / "CRITICAL" / "IMPORTANT" admonitions
     (re.compile(r'(You MUST[^.]*\.)\s*(?=.*\1)', re.DOTALL), r'\1'),
+    (re.compile(r'(CRITICAL:[^.]*\.)\s*(?=.*\1)', re.DOTALL), r'\1'),
+    (re.compile(r'(IMPORTANT:[^.]*\.)\s*(?=.*\1)', re.DOTALL), r'\1'),
     # Repeated "Do not" instructions
     (re.compile(r'(Do not[^.]*\.)\s*(?=.*\1)', re.DOTALL), r'\1'),
     # Repeated tool-use enforcement blocks
     (re.compile(r'(When you say you will perform an action[^.]*\.)\s*(?=.*\1)', re.DOTALL), r'\1'),
-    # Collapse multiple blank lines
+    # Hermes: repeated "If you have tools available" admonitions
+    (re.compile(r'(If you have tools available[^.]*\.)\s*(?=.*If you have tools)', re.DOTALL), r'\1'),
+    # Collapse multiple blank lines (3+ → 2)
     (re.compile(r'\n{3,}'), '\n\n'),
+    # Collapse multiple spaces at line starts
+    (re.compile(r'\n {4,}'), '\n  '),
 ]
 
 
@@ -606,11 +617,14 @@ def strip_response(body: bytes) -> bytes:
         stripped = _strip_response_obj(data)
 
         new_body = json.dumps(stripped, ensure_ascii=False).encode("utf-8")
-        if len(new_body) < original_len:
-            with _stats_lock:
-                _stats.strips_response += 1
-                _stats.tokens_saved_est += (original_len - len(new_body)) // 3
-            return new_body
+        saved = original_len - len(new_body)
+        with _stats_lock:
+            _stats.strips_response += 1
+            if saved > 0:
+                _stats.tokens_saved_est += saved // 4  # conservative: ~4 chars/token
+        if saved > 0:
+            print(f"[strip_response] removed {saved} bytes", file=sys.stderr, flush=True)
+        return new_body
     except (json.JSONDecodeError, TypeError):
         pass
 
