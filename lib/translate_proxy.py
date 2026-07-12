@@ -987,6 +987,8 @@ def build_dashboard() -> bytes:
         rows += f"<tr><td>{name}</td><td>{count}</td><td>{detail}</td></tr>"
 
     html = DASHBOARD_HTML
+    # Unescape CSS braces (doubled in source to avoid .format() conflicts)
+    html = html.replace("{{", "{").replace("}}", "}")
     html = html.replace("__MODULES__", modules_html)
     html = html.replace("__TOTAL_REQUESTS__", str(s.total_requests))
     html = html.replace("__TOKENS_SAVED__", f"{s.chars_reduced:,}")
