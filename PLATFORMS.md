@@ -97,22 +97,61 @@ TOKEN_SAVER_ROUTER_CHEAP_MODEL=deepseek-v4-flash-claude \
 └─────────────────────────────────────────────┘
 ```
 
-### Token GenPlat no Windows
+### VPN Corporativa + WSL2
 
-O `wsl-setup.sh` pede o token interativamente e salva em `~/.hermes/.env` dentro do WSL2.
+A GenPlat está atrás da VPN do iFood. O WSL2 tem rede isolada — a VPN do Windows
+**não** propaga automaticamente.
 
-Para renovar o token depois:
+**Diagnóstico:**
 ```sh
-# Dentro do WSL2:
-nano ~/.hermes/.env
-# Atualizar: GENPLAT_API_KEY=seu-novo-token
+bash wsl-vpn-check.sh
 ```
 
-Se usa `tompero token` para gerar tokens, rode dentro do WSL2:
+**Solução recomendada: WSL2 Mirror Mode (Windows 11 23H2+)**
+
+Crie `%USERPROFILE%\.wslconfig` no Windows:
+```ini
+[wsl2]
+networkingMode=mirrored
+dnsTunneling=true
+```
+
+Depois reinicie o WSL:
+```powershell
+wsl --shutdown
+wsl
+```
+
+Isso faz o WSL2 compartilhar a rede do Windows — VPN, DNS, tudo funciona.
+
+**Alternativa: Proxy explícito**
 ```sh
+export HTTP_PROXY=http://proxy.ifoodcorp.com.br:80
+export HTTPS_PROXY=http://proxy.ifoodcorp.com.br:80
+```
+
+### Token GenPlat
+
+**Setup inicial** (interativo, feito pelo `wsl-setup.sh`):
+```sh
+# O script pede o token e salva em ~/.hermes/.env
+```
+
+**Renovar token:**
+```sh
+# Opção 1: Editar manualmente
+nano ~/.hermes/.env
+# Atualizar: GENPLAT_API_KEY=seu-novo-token
+
+# Opção 2: Via tompero (se instalado no WSL2)
 tompero token
-# O token gerado vai para ~/.config/tompero/requester_token
+# O token vai para ~/.config/tompero/requester_token
 # O hermes-token-saver usa GENPLAT_API_KEY do ~/.hermes/.env
+```
+
+**Verificar:**
+```sh
+cat ~/.hermes/.env | grep GENPLAT_API_KEY
 ```
 
 ## Resumo
