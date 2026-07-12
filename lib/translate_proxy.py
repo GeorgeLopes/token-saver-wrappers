@@ -824,70 +824,136 @@ def process_response(body: bytes, content_type: str, request_body: bytes, model:
 # ---------------------------------------------------------------------------
 
 DASHBOARD_HTML = """<!DOCTYPE html>
-<html lang="en">
+<html lang="pt-BR">
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>Token Saver Proxy</title>
+<title>Token Saver · iFood Pago SRE</title>
+<link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;600;800&display=swap" rel="stylesheet">
 <style>
+  :root {{
+    --ifood-red: #EA1D2C;
+    --ifood-wine: #9C050B;
+    --bg: #0F0F12;
+    --card: #1A1A1A;
+    --border: #333333;
+    --text: #FFFFFF;
+    --text-secondary: #B0B0B0;
+    --success: #4CAF50;
+  }}
   * {{ margin: 0; padding: 0; box-sizing: border-box; }}
-  body {{ font-family: -apple-system, system-ui, sans-serif; background: #0d1117; color: #c9d1d9; padding: 2rem; }}
-  h1 {{ font-size: 1.5rem; margin-bottom: 0.5rem; color: #58a6ff; }}
-  .subtitle {{ color: #8b949e; margin-bottom: 2rem; font-size: 0.9rem; }}
-  .grid {{ display: grid; grid-template-columns: repeat(auto-fit, minmax(240px, 1fr)); gap: 1rem; margin-bottom: 2rem; }}
-  .card {{ background: #161b22; border: 1px solid #30363d; border-radius: 8px; padding: 1.2rem; }}
-  .card h3 {{ font-size: 0.75rem; text-transform: uppercase; color: #8b949e; margin-bottom: 0.5rem; letter-spacing: 0.05em; }}
-  .card .value {{ font-size: 1.8rem; font-weight: 700; color: #58a6ff; }}
-  .card .unit {{ font-size: 0.8rem; color: #8b949e; }}
-  .modules {{ display: flex; flex-wrap: wrap; gap: 0.5rem; margin-bottom: 2rem; }}
-  .module {{ padding: 0.3rem 0.8rem; border-radius: 20px; font-size: 0.8rem; font-weight: 600; }}
-  .module.on {{ background: #1a7f37; color: #fff; }}
-  .module.off {{ background: #21262d; color: #8b949e; }}
-  table {{ width: 100%; border-collapse: collapse; }}
-  th, td {{ text-align: left; padding: 0.5rem 0.75rem; border-bottom: 1px solid #30363d; font-size: 0.85rem; }}
-  th {{ color: #8b949e; font-weight: 600; }}
-  td {{ color: #c9d1d9; }}
-  .positive {{ color: #3fb950; }}
-  .refresh {{ color: #8b949e; font-size: 0.75rem; }}
+  body {{
+    font-family: 'Inter', -apple-system, sans-serif;
+    background: var(--bg);
+    color: var(--text);
+    min-height: 100vh;
+  }}
+  .header {{
+    background: linear-gradient(135deg, var(--ifood-red) 0%, var(--ifood-wine) 100%);
+    padding: 2rem 2rem 1.5rem;
+  }}
+  .header h1 {{
+    font-size: 1.5rem; font-weight: 800; color: #fff; letter-spacing: -0.02em;
+  }}
+  .header .subtitle {{
+    font-size: 0.85rem; color: rgba(255,255,255,0.7); margin-top: 0.25rem; font-weight: 400;
+  }}
+  .main {{ padding: 1.5rem 2rem; }}
+  .modules {{
+    display: flex; flex-wrap: wrap; gap: 0.5rem; margin-bottom: 2rem;
+  }}
+  .module {{
+    padding: 0.35rem 0.9rem; border-radius: 20px; font-size: 0.78rem;
+    font-weight: 600; display: flex; align-items: center; gap: 0.4rem;
+  }}
+  .module.on {{ background: rgba(76,175,80,0.15); color: var(--success); border: 1px solid rgba(76,175,80,0.3); }}
+  .module.off {{ background: rgba(255,255,255,0.05); color: var(--text-secondary); border: 1px solid var(--border); }}
+  .module .dot {{ width: 6px; height: 6px; border-radius: 50%; }}
+  .module.on .dot {{ background: var(--success); }}
+  .module.off .dot {{ background: var(--text-secondary); }}
+  .grid {{
+    display: grid; grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
+    gap: 1rem; margin-bottom: 2rem;
+  }}
+  .kpi {{
+    background: var(--card); border-radius: 10px; padding: 1.3rem;
+    border-left: 3px solid var(--ifood-red);
+  }}
+  .kpi h3 {{
+    font-size: 0.7rem; text-transform: uppercase; color: var(--text-secondary);
+    font-weight: 600; letter-spacing: 0.06em; margin-bottom: 0.5rem;
+  }}
+  .kpi .value {{
+    font-size: 2rem; font-weight: 800; color: var(--text); line-height: 1.1;
+  }}
+  .kpi .unit {{
+    font-size: 0.8rem; color: var(--text-secondary); font-weight: 400;
+  }}
+  table {{
+    width: 100%; border-collapse: collapse;
+  }}
+  th, td {{
+    text-align: left; padding: 0.6rem 0.75rem; font-size: 0.82rem;
+  }}
+  th {{
+    color: var(--text-secondary); font-weight: 600; text-transform: uppercase;
+    font-size: 0.7rem; letter-spacing: 0.05em; border-bottom: 2px solid var(--border);
+  }}
+  td {{
+    border-bottom: 1px solid var(--border); color: var(--text);
+  }}
+  tr:hover td {{ background: rgba(234,29,44,0.04); }}
+  .footer {{
+    display: flex; justify-content: space-between; align-items: center;
+    padding: 1rem 2rem; border-top: 1px solid var(--border);
+    color: var(--text-secondary); font-size: 0.75rem;
+  }}
+  .footer .brand {{ font-weight: 600; color: var(--ifood-red); }}
+  .refresh {{ color: var(--text-secondary); font-size: 0.7rem; }}
 </style>
 </head>
 <body>
-<h1>Token Saver Proxy</h1>
-<p class="subtitle">Modular token reduction pipeline — refresh for live stats</p>
 
-<div class="modules">
-  __MODULES__
+<div class="header">
+  <h1>Token Saver</h1>
+  <p class="subtitle">Pipeline modular de redução de tokens · iFood Pago SRE</p>
 </div>
 
-<div class="grid">
-  <div class="card">
-    <h3>Total Requests</h3>
-    <div class="value">__TOTAL_REQUESTS__</div>
+<div class="main">
+  <div class="modules">__MODULES__</div>
+
+  <div class="grid">
+    <div class="kpi">
+      <h3>Requests</h3>
+      <div class="value">__TOTAL_REQUESTS__</div>
+    </div>
+    <div class="kpi">
+      <h3>Chars Reduzidos (input)</h3>
+      <div class="value">__TOKENS_SAVED__<span class="unit"> chars</span></div>
+    </div>
+    <div class="kpi">
+      <h3>Cache Hit Rate</h3>
+      <div class="value">__CACHE_HIT_RATE__<span class="unit">%</span></div>
+    </div>
+    <div class="kpi">
+      <h3>Cache Entries</h3>
+      <div class="value">__CACHE_ENTRIES__</div>
+    </div>
   </div>
-  <div class="card">
-    <h3>Input Chars Reduced</h3>
-    <div class="value">__TOKENS_SAVED__<span class="unit"> chars</span></div>
-  </div>
-  <div class="card">
-    <h3>Cache Hit Rate</h3>
-    <div class="value">__CACHE_HIT_RATE__<span class="unit">%</span></div>
-  </div>
-  <div class="card">
-    <h3>Cache Entries</h3>
-    <div class="value">__CACHE_ENTRIES__</div>
-  </div>
+
+  <table>
+    <thead>
+      <tr><th>Módulo</th><th>Ativações</th><th>Detalhe</th></tr>
+    </thead>
+    <tbody>__MODULE_ROWS__</tbody>
+  </table>
 </div>
 
-<table>
-  <thead>
-    <tr><th>Module</th><th>Activations</th><th>Detail</th></tr>
-  </thead>
-  <tbody>
-    __MODULE_ROWS__
-  </tbody>
-</table>
+<div class="footer">
+  <span class="brand">· iFood Pago SRE</span>
+  <span class="refresh">Atualiza a cada 5s</span>
+</div>
 
-<p class="refresh">Auto-refreshes every 5s</p>
 <script>setTimeout(() => location.reload(), 5000);</script>
 </body>
 </html>"""
@@ -906,7 +972,8 @@ def build_dashboard() -> bytes:
     module_names = ["prompt_cache", "summarize", "strip_system", "minify_tools", "router", "translate", "strip_response"]
     for name in module_names:
         active = name in ACTIVE_MODULES
-        modules_html += f'<span class="module {"on" if active else "off"}">{name}</span> '
+        cls = "on" if active else "off"
+        modules_html += f'<span class="module {cls}"><span class="dot"></span>{name}</span> '
 
     rows = ""
     for name, count, detail in [
