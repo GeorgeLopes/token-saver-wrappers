@@ -8,6 +8,7 @@ FROM python:3.12-slim
 RUN pip install --no-cache-dir deep-translator==1.11.4
 
 COPY lib/translate_proxy.py /translate_proxy.py
+RUN chmod 644 /translate_proxy.py
 
 # Feature flags — all default ON except heavy modules
 ENV FEATURE_TRANSLATE=1
