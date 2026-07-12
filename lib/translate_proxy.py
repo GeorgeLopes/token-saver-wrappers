@@ -829,7 +829,6 @@ DASHBOARD_HTML = """<!DOCTYPE html>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>Token Saver · iFood Pago SRE</title>
-<link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;600;800&display=swap" rel="stylesheet">
 <style>
   :root {{
     --ifood-red: #EA1D2C;
@@ -843,7 +842,7 @@ DASHBOARD_HTML = """<!DOCTYPE html>
   }}
   * {{ margin: 0; padding: 0; box-sizing: border-box; }}
   body {{
-    font-family: 'Inter', -apple-system, sans-serif;
+    font-family: -apple-system, 'Helvetica Neue', system-ui, sans-serif;
     background: var(--bg);
     color: var(--text);
     min-height: 100vh;
