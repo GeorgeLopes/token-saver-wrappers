@@ -1,234 +1,195 @@
 # Hermes + Token Saver — Guia de uso
 
-Última atualização: 2026-07-12
+Última atualização: 2026-07-12 (rodada 3 — 7 módulos estáveis)
 
 ## Pré-requisitos
 
 ```sh
-# Verificar que está tudo instalado
 which hermes-token-saver token-saver-ctl
 podman image ls | grep -E "headroom|translate|mitmproxy"
 
-# Se não tiver, rodar uma vez:
+# Instalar (uma vez):
 cd ~/token-saver-wrappers && ./build-and-install
 ```
 
-## Ligar o pod
+## Uso diário (atalhos)
 
 ```sh
-# Com pipeline completo (tradução + strip modules)
-TOKEN_SAVER_TRANSLATE_ENABLED=1 token-saver-ctl start
-
-# Sem tradução (só compressão headroom)
-token-saver-ctl start
+hts         # hermes com pipeline completo (7 módulos)
+hts-status  # status do pod
+hts-dash    # abre dashboard no navegador
+hts-stats   # economia real do headroom
 ```
 
-Verificar:
+Adicionado ao `~/.zshrc`:
 ```sh
-token-saver-ctl status
-# Deve mostrar:
-#   headroom: ready on 127.0.0.1:8787
-#   translate: ready on 127.0.0.1:8786 (pt-BR ↔ EN)
+alias hts="TOKEN_SAVER_FEATURE_SUMMARIZE=1 TOKEN_SAVER_FEATURE_PROMPT_CACHE=1 TOKEN_SAVER_FEATURE_ROUTER=1 TOKEN_SAVER_SUMMARIZE_MODEL=deepseek-v4-flash-claude TOKEN_SAVER_ROUTER_CHEAP_MODEL=deepseek-v4-flash-claude hermes-token-saver"
+alias hts-status="token-saver-ctl status"
+alias hts-dash="open http://127.0.0.1:8786/dashboard"
+alias hts-stats="token-saver-ctl stats"
 ```
 
-## Usar com hermes
+## Ligar/desligar o pod
 
 ```sh
-# No lugar de "hermes", use "hermes-token-saver"
-hermes-token-saver "faça code review do arquivo src/main.py"
-
-# Com módulos pesados ativados:
+# Ligar com pipeline completo (7 módulos)
+TOKEN_SAVER_TRANSLATE_ENABLED=1 \
 TOKEN_SAVER_FEATURE_SUMMARIZE=1 \
 TOKEN_SAVER_FEATURE_PROMPT_CACHE=1 \
 TOKEN_SAVER_FEATURE_ROUTER=1 \
-  hermes-token-saver "refatore o módulo de auth"
+TOKEN_SAVER_SUMMARIZE_MODEL=deepseek-v4-flash-claude \
+TOKEN_SAVER_ROUTER_CHEAP_MODEL=deepseek-v4-flash-claude \
+  token-saver-ctl start
+
+# Apenas compressão headroom (sem pipeline)
+token-saver-ctl start
+
+# Parar / destruir
+token-saver-ctl stop
+token-saver-ctl destroy
 ```
 
-O wrapper hermes-token-saver:
-1. Garante que o pod está rodando
-2. Configura HTTP_PROXY/HTTPS_PROXY → mitm sidecar
-3. Configura CA trust → mitmproxy CA
-4. Executa `hermes` real com os overrides de ambiente
-5. Todo tráfego LLM passa pelo pipeline automaticamente
-
-## Fluxo completo
+## Pipeline completo (7 módulos)
 
 ```
-hermes --env--> HTTP_PROXY=mitm:8790 --> mitm intercepta hosts LLM
-                                               │
-                                               ▼
-                                     proxy pipeline :8786
-                                     ├── strip_system (dedup)
-                                     ├── minify_tools (strip JSON Schema)
-                                     ├── router (opcional)
-                                     ├── translate (pt→EN)
-                                     │
-                                     ▼
-                                     headroom :8787 (compressão)
-                                     │
-                                     ▼
-                                     GenPlat / DeepSeek / OpenRouter
+REQUEST:
+  1. prompt_cache  → SHA256 lookup, retorna instantâneo se hit
+  2. summarize     → colapsa histórico > 15K chars em resumo
+  3. strip_system  → dedup "You MUST"/"CRITICAL" no system prompt
+  4. minify_tools  → remove descriptions/defaults do JSON Schema
+  5. router        → queries simples → deepseek-v4-flash-claude
+  6. translate     → pt-BR → EN (Google Translate)
+
+RESPONSE:
+  1. translate     → EN → pt-BR
+  2. strip_response → remove logprobs/usage/system_fingerprint
+  3. prompt_cache  → armazena resposta para reuso
 ```
 
-## Módulos disponíveis
+## Módulos — liga/desliga individual
 
-| Módulo | Variável | Default | O que faz |
+| Módulo | Variável | Default | Economia típica |
 |---|---|---|---|
-| translate | `TOKEN_SAVER_TRANSLATE_ENABLED` | ON* | pt-BR ↔ EN via Google Translate |
-| strip_system | `TOKEN_SAVER_FEATURE_STRIP_SYSTEM` | ON | Remove instruções repetidas do system prompt |
-| minify_tools | `TOKEN_SAVER_FEATURE_MINIFY_TOOLS` | ON | Remove descriptions/defaults do JSON Schema das tools |
-| strip_response | `TOKEN_SAVER_FEATURE_STRIP_RESPONSE` | ON | Remove logprobs/usage/system_fingerprint das respostas |
-| summarize | `TOKEN_SAVER_FEATURE_SUMMARIZE` | OFF | Resume histórico antigo quando >15K tokens |
-| prompt_cache | `TOKEN_SAVER_FEATURE_PROMPT_CACHE` | OFF | Cache SHA256 — requests idênticos retornam instantâneo |
-| router | `TOKEN_SAVER_FEATURE_ROUTER` | OFF | Roteia queries simples pra modelo mais barato |
+| translate | `TOKEN_SAVER_TRANSLATE_ENABLED` | ON* | pt↔EN reduz chars |
+| strip_system | `TOKEN_SAVER_FEATURE_STRIP_SYSTEM` | ON | ~118 tokens/req |
+| minify_tools | `TOKEN_SAVER_FEATURE_MINIFY_TOOLS` | ON | ~14.8K chars/req |
+| strip_response | `TOKEN_SAVER_FEATURE_STRIP_RESPONSE` | ON | ~500 bytes/req |
+| summarize | `TOKEN_SAVER_FEATURE_SUMMARIZE` | OFF** | colapsa histórico longo |
+| prompt_cache | `TOKEN_SAVER_FEATURE_PROMPT_CACHE` | OFF** | hit = 0 tokens gastos |
+| router | `TOKEN_SAVER_FEATURE_ROUTER` | OFF** | flash vs Opus (~80%) |
 
-\* ON quando `TOKEN_SAVER_TRANSLATE_ENABLED=1` é passado no start.
-
-## Desabilitar módulos específicos
+\* ON quando `TOKEN_SAVER_TRANSLATE_ENABLED=1` no start do pod
+\** ON via alias `hts`
 
 ```sh
-# Desabilitar tradução (mantém compressão + demais módulos)
-FEATURE_TRANSLATE=0 hermes-token-saver "pergunta em inglês"
+# Desligar tradução (manter compressão + demais módulos)
+FEATURE_TRANSLATE=0 hts "pergunta em inglês"
 
-# Desabilitar minificação de tools (se o modelo precisar das descriptions)
-FEATURE_MINIFY_TOOLS=0 hermes-token-saver "..."
+# Desligar minificação de tools
+FEATURE_MINIFY_TOOLS=0 hts "..."
 
-# Desabilitar tudo, só compressão pura
+# Apenas compressão pura (todos os módulos off)
 FEATURE_TRANSLATE=0 FEATURE_STRIP_SYSTEM=0 \
 FEATURE_MINIFY_TOOLS=0 FEATURE_STRIP_RESPONSE=0 \
   hermes-token-saver "..."
 ```
 
-## Como saber se está funcionando
+## Modelos configurados
 
-### 1. Header nas respostas
+| Uso | Modelo | Variável |
+|---|---|---|
+| Principal (hermes) | deepseek-v4-pro | (config do hermes) |
+| Router (queries simples) | deepseek-v4-flash-claude | `TOKEN_SAVER_ROUTER_CHEAP_MODEL` |
+| Summarize (resumo) | deepseek-v4-flash-claude | `TOKEN_SAVER_SUMMARIZE_MODEL` |
 
-Toda resposta do proxy inclui:
+## Visibilidade
+
+### 1. Header HTTP em toda resposta
 ```
-X-Token-Saver-Modules: strip_system, minify_tools, translate, strip_response
-```
-
-Para ver no hermes, habilite verbose logging ou inspecione com mitmproxy:
-```sh
-# Ver os headers das requisições que passam pelo mitm
-token-saver-ctl logs mitm
-```
-
-### 2. Dashboard
-
-```sh
-open http://127.0.0.1:8786/dashboard
+X-Token-Saver-Modules: prompt_cache, summarize, strip_system, minify_tools, router, translate, strip_response
 ```
 
-Mostra em tempo real:
-- Módulos ativos (pills verde = ON, cinza = OFF)
-- Total de requests processados
-- Tokens saved (estimado)
-- Cache hit rate
-- Ativações por módulo
+### 2. Dashboard (navegador)
+```
+http://127.0.0.1:8786/dashboard
+```
+Mostra em tempo real (auto-refresh 5s):
+- 7 módulos (pills verde = ON, cinza = OFF)
+- Total de requests
+- Input chars reduzidos (pipeline)
+- Cache hit rate + entries
+- Ativações por módulo: strip_system, minify_tools, router, translate, strip_response (SSE separado)
 
 ### 3. Stats JSON
-
 ```sh
 curl -s http://127.0.0.1:8786/stats | python3 -m json.tool
 ```
 
-Exemplo de output:
-```json
-{
-  "modules": ["strip_system", "minify_tools", "translate", "strip_response"],
-  "total_requests": 42,
-  "tokens_saved_est": 12500,
-  "cache": {"hits": 3, "misses": 39, "entries": 12, "size_bytes": 45000},
-  "activations": {
-    "strip_system": 42,
-    "minify_tools": 38,
-    "translate_in": 35,
-    "translate_out": 40,
-    "strip_response": 42
-  }
-}
+### 4. Economia real (headroom)
+```sh
+hts-stats
+# Mostra tokens comprimidos e custo real economizado
 ```
 
-### 4. Health check
-
+### 5. Health check
 ```sh
 curl -s http://127.0.0.1:8786/health | python3 -m json.tool
+# Mostra quais módulos estão ativos, translator status, cache entries
 ```
 
-### 5. Headroom stats (compressão)
+## Métricas — o que cada número significa
 
-```sh
-token-saver-ctl stats
-# Mostra resumo de tokens comprimidos pelo headroom
-```
+| Métrica | Fonte | Significado |
+|---|---|---|
+| `chars_reduced` | `/stats` | Total de chars removidos do input (soma de todos os módulos). NÃO é custo. |
+| `Tokens saved` | `hts-stats` | Tokens reais economizados pelo headroom (compressão). ESSE é o custo. |
+| `Cost saved` | `hts-stats` | $ economizados (quando provider reporta pricing) |
+| `cache hits/misses` | `/stats` | Requests idênticos (SHA256) que retornaram do cache |
+| `sse_passthrough` | `/stats` | Responses streaming que pularam o pipeline |
 
-## Desligar
+## Resultados reais (3 rodadas de teste)
 
-```sh
-# Parar (containers mantidos, restart rápido)
-token-saver-ctl stop
+| Rodada | Requests | Headroom | strip_system | minify_tools | router |
+|---|---|---|---|---|---|
+| 1 | 8 | 12.98% (14K tokens) | 0 (bug) | 7/8 | off |
+| 2 | 5 | 10.62% (5K tokens) | 4/5 ✅ | 4/5 | off |
+| 3 | 3 | 0%* | 2/3 | 2/3 | 3/3 → flash ✅ |
 
-# Destruir completamente
-token-saver-ctl destroy
-```
+\* Requests curtas, sem conteúdo compressível — esperado.
 
 ## Troubleshooting
 
-**hermes-token-saver não encontra o binário:**
+**hts não encontra o comando:**
 ```sh
-export TOKEN_SAVER_HERMES_BIN=/caminho/do/hermes
-hermes-token-saver "..."
+source ~/.zshrc  # ou abra nova aba
 ```
 
-**Tradução não funciona (só compressão):**
+**Erro "Invalid model name":**
+O router ou summarize está usando um modelo que não existe no GenPlat.
 ```sh
-# Verificar se translate está no pod
-token-saver-ctl status
-# Deve aparecer "translate: ready on 127.0.0.1:8786"
+# Verificar modelo configurado:
+echo $TOKEN_SAVER_ROUTER_CHEAP_MODEL
+echo $TOKEN_SAVER_SUMMARIZE_MODEL
 
-# Se aparecer "disabled", recriar com a flag:
-token-saver-ctl destroy
-TOKEN_SAVER_TRANSLATE_ENABLED=1 token-saver-ctl start
+# Corrigir no ~/.zshrc (alias hts) ou desabilitar:
+FEATURE_ROUTER=0 FEATURE_SUMMARIZE=0 hts "..."
 ```
 
-**Erro de CA certificate:**
+**Tradução não funciona:**
 ```sh
-# O hermes-token-saver gerencia o CA automaticamente.
-# Se persistir, destruir e recriar o pod:
-token-saver-ctl destroy
-TOKEN_SAVER_TRANSLATE_ENABLED=1 token-saver-ctl start
+hts-status
+# Deve mostrar: translate: ready on 127.0.0.1:8786 (pt-BR ↔ EN)
+# Se disabled, destruir e recriar com TOKEN_SAVER_TRANSLATE_ENABLED=1
 ```
 
-**Portas em conflito (8787/8786/8790 em uso):**
-```sh
-# O script automaticamente escolhe portas alternativas.
-# Verificar quais foram escolhidas:
-token-saver-ctl status
-```
+**Portas em conflito:**
+O script escolhe portas alternativas automaticamente. Verificar com `hts-status`.
 
-**Pod não inicia (podman machine parada):**
+**Pod não inicia:**
 ```sh
 podman machine start
-token-saver-ctl start
+hts-status
 ```
 
-**Dashboard não abre:**
-```sh
-# Verificar porta correta
-token-saver-ctl status | grep translate
-# Ex: translate: ready on 127.0.0.1:8792
-# Abrir http://127.0.0.1:<porta>/dashboard
-```
-
-## Atalhos
-
-```sh
-# Alias para o dia a dia
-alias hts='hermes-token-saver'
-alias hts-full='TOKEN_SAVER_TRANSLATE_ENABLED=1 hermes-token-saver'
-alias hts-status='TOKEN_SAVER_TRANSLATE_ENABLED=1 token-saver-ctl status'
-alias hts-dash='open http://127.0.0.1:8786/dashboard'
-```
-
-Adicione ao `~/.zshrc` ou `~/.bashrc`.
+**Cache não efetivo (>0 misses, 0 hits):**
+Normal com poucas requests. Cache brilha após 10+ interações no mesmo contexto.
