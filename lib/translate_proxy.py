@@ -798,25 +798,25 @@ DASHBOARD_HTML = """<!DOCTYPE html>
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>Token Saver Proxy</title>
 <style>
-  * { margin: 0; padding: 0; box-sizing: border-box; }
-  body { font-family: -apple-system, system-ui, sans-serif; background: #0d1117; color: #c9d1d9; padding: 2rem; }
-  h1 { font-size: 1.5rem; margin-bottom: 0.5rem; color: #58a6ff; }
-  .subtitle { color: #8b949e; margin-bottom: 2rem; font-size: 0.9rem; }
-  .grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(240px, 1fr)); gap: 1rem; margin-bottom: 2rem; }
-  .card { background: #161b22; border: 1px solid #30363d; border-radius: 8px; padding: 1.2rem; }
-  .card h3 { font-size: 0.75rem; text-transform: uppercase; color: #8b949e; margin-bottom: 0.5rem; letter-spacing: 0.05em; }
-  .card .value { font-size: 1.8rem; font-weight: 700; color: #58a6ff; }
-  .card .unit { font-size: 0.8rem; color: #8b949e; }
-  .modules { display: flex; flex-wrap: wrap; gap: 0.5rem; margin-bottom: 2rem; }
-  .module { padding: 0.3rem 0.8rem; border-radius: 20px; font-size: 0.8rem; font-weight: 600; }
-  .module.on { background: #1a7f37; color: #fff; }
-  .module.off { background: #21262d; color: #8b949e; }
-  table { width: 100%; border-collapse: collapse; }
-  th, td { text-align: left; padding: 0.5rem 0.75rem; border-bottom: 1px solid #30363d; font-size: 0.85rem; }
-  th { color: #8b949e; font-weight: 600; }
-  td { color: #c9d1d9; }
-  .positive { color: #3fb950; }
-  .refresh { color: #8b949e; font-size: 0.75rem; }
+  * {{ margin: 0; padding: 0; box-sizing: border-box; }}
+  body {{ font-family: -apple-system, system-ui, sans-serif; background: #0d1117; color: #c9d1d9; padding: 2rem; }}
+  h1 {{ font-size: 1.5rem; margin-bottom: 0.5rem; color: #58a6ff; }}
+  .subtitle {{ color: #8b949e; margin-bottom: 2rem; font-size: 0.9rem; }}
+  .grid {{ display: grid; grid-template-columns: repeat(auto-fit, minmax(240px, 1fr)); gap: 1rem; margin-bottom: 2rem; }}
+  .card {{ background: #161b22; border: 1px solid #30363d; border-radius: 8px; padding: 1.2rem; }}
+  .card h3 {{ font-size: 0.75rem; text-transform: uppercase; color: #8b949e; margin-bottom: 0.5rem; letter-spacing: 0.05em; }}
+  .card .value {{ font-size: 1.8rem; font-weight: 700; color: #58a6ff; }}
+  .card .unit {{ font-size: 0.8rem; color: #8b949e; }}
+  .modules {{ display: flex; flex-wrap: wrap; gap: 0.5rem; margin-bottom: 2rem; }}
+  .module {{ padding: 0.3rem 0.8rem; border-radius: 20px; font-size: 0.8rem; font-weight: 600; }}
+  .module.on {{ background: #1a7f37; color: #fff; }}
+  .module.off {{ background: #21262d; color: #8b949e; }}
+  table {{ width: 100%; border-collapse: collapse; }}
+  th, td {{ text-align: left; padding: 0.5rem 0.75rem; border-bottom: 1px solid #30363d; font-size: 0.85rem; }}
+  th {{ color: #8b949e; font-weight: 600; }}
+  td {{ color: #c9d1d9; }}
+  .positive {{ color: #3fb950; }}
+  .refresh {{ color: #8b949e; font-size: 0.75rem; }}
 </style>
 </head>
 <body>
@@ -824,25 +824,25 @@ DASHBOARD_HTML = """<!DOCTYPE html>
 <p class="subtitle">Modular token reduction pipeline — refresh for live stats</p>
 
 <div class="modules">
-  {MODULES}
+  __MODULES__
 </div>
 
 <div class="grid">
   <div class="card">
     <h3>Total Requests</h3>
-    <div class="value">{TOTAL_REQUESTS}</div>
+    <div class="value">__TOTAL_REQUESTS__</div>
   </div>
   <div class="card">
     <h3>Tokens Saved (est)</h3>
-    <div class="value">{TOKENS_SAVED}<span class="unit"> tokens</span></div>
+    <div class="value">__TOKENS_SAVED__<span class="unit"> tokens</span></div>
   </div>
   <div class="card">
     <h3>Cache Hit Rate</h3>
-    <div class="value">{CACHE_HIT_RATE}<span class="unit">%</span></div>
+    <div class="value">__CACHE_HIT_RATE__<span class="unit">%</span></div>
   </div>
   <div class="card">
     <h3>Cache Entries</h3>
-    <div class="value">{CACHE_ENTRIES}</div>
+    <div class="value">__CACHE_ENTRIES__</div>
   </div>
 </div>
 
@@ -851,7 +851,7 @@ DASHBOARD_HTML = """<!DOCTYPE html>
     <tr><th>Module</th><th>Activations</th><th>Detail</th></tr>
   </thead>
   <tbody>
-    {MODULE_ROWS}
+    __MODULE_ROWS__
   </tbody>
 </table>
 
@@ -888,14 +888,13 @@ def build_dashboard() -> bytes:
     ]:
         rows += f"<tr><td>{name}</td><td>{count}</td><td>{detail}</td></tr>"
 
-    html = DASHBOARD_HTML.format(
-        MODULES=modules_html,
-        TOTAL_REQUESTS=s.total_requests,
-        TOKENS_SAVED=f"{s.tokens_saved_est:,}",
-        CACHE_HIT_RATE=hit_rate,
-        CACHE_ENTRIES=cache["entries"],
-        MODULE_ROWS=rows,
-    )
+    html = DASHBOARD_HTML
+    html = html.replace("__MODULES__", modules_html)
+    html = html.replace("__TOTAL_REQUESTS__", str(s.total_requests))
+    html = html.replace("__TOKENS_SAVED__", f"{s.tokens_saved_est:,}")
+    html = html.replace("__CACHE_HIT_RATE__", str(hit_rate))
+    html = html.replace("__CACHE_ENTRIES__", str(cache["entries"]))
+    html = html.replace("__MODULE_ROWS__", rows)
     return html.encode()
 
 
