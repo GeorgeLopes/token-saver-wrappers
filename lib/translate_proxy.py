@@ -494,7 +494,9 @@ COMPLEX_KEYWORDS = re.compile(
     r'design pattern|migrat|migração|security|segurança|vulnerab|'
     r'performance|otimiz|optimiz|concurrency|paralel|race condition|'
     r'schema|database|transaction|distributed|recurs|complex|'
-    r'explain|explique|analyze|analise|review full|full review'
+    r'explain|explique|analyze|analise|review full|full review|'
+    r'compare|compara|evaluate|avalia|audit|auditoria|'
+    r'how does|como funciona|why|por que|what is the best'
     r')',
     re.IGNORECASE,
 )
@@ -507,6 +509,13 @@ SIMPLE_KEYWORDS = re.compile(
     r'simple|simples|quick|rápido|basic|básico|'
     r'fix typo|corrige typo|rename|renomeia|commit|push|pull'
     r')',
+    re.IGNORECASE,
+)
+
+# Short messages containing these are still complex
+COMPLEX_SHORT_PATTERNS = re.compile(
+    r'\b(?:explain|explique|analyze|analise|compare|compara|'
+    r'evaluate|avalia|audit|how|como|why|por que|best|melhor)\b',
     re.IGNORECASE,
 )
 
@@ -542,8 +551,11 @@ def router_should_reroute(messages: list) -> tuple[bool, str]:
     if SIMPLE_KEYWORDS.search(text):
         return True, "simple task detected"
 
-    # Heuristic: short messages (< 100 chars) tend to be simple
-    if len(text) < 100:
+    # Short messages (< 150 chars) tend to be simple...
+    # BUT if they contain analysis keywords, treat as complex
+    if len(text) < 150:
+        if COMPLEX_SHORT_PATTERNS.search(text):
+            return False, "short but complex"
         return True, "short query"
 
     return False, ""
