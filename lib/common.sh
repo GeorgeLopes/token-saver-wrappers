@@ -34,6 +34,7 @@ TS_TRANSLATE_IMAGE="${TOKEN_SAVER_TRANSLATE_IMAGE:-localhost/translate-token-sav
 
 TS_MITM_DIR="$TOKEN_SAVER_HOME/mitm"
 TS_HEADROOM_DIR="$TOKEN_SAVER_HOME/headroom"
+TS_DATA_DIR="$TOKEN_SAVER_HOME/data"
 TS_LIB_DIR="$TOKEN_SAVER_HOME/lib"
 TS_CA_CERT="$TS_MITM_DIR/mitmproxy-ca-cert.pem"
 TS_HOSTS_FILE="$TS_MITM_DIR/intercept-hosts.txt"
@@ -219,8 +220,10 @@ ts_start_translate() {
     podman image exists "$TS_TRANSLATE_IMAGE" \
         || ts_die "translate image $TS_TRANSLATE_IMAGE not found. Run build-and-install first."
     ts_log "starting translate container (pt-BR ↔ EN + token reduction pipeline)"
+    mkdir -p "$TS_DATA_DIR"
     ts_podman run -d --pod "$TS_POD" --name "${TS_POD}-translate" \
         --restart unless-stopped \
+        -v "$TS_DATA_DIR:/tmp/token-saver-cache" \
         -e "TRANSLATE_ENABLED=$TS_TRANSLATE_ENABLED" \
         -e "FEATURE_TRANSLATE=$TS_TRANSLATE_ENABLED" \
         -e "FEATURE_STRIP_RESPONSE=${TOKEN_SAVER_FEATURE_STRIP_RESPONSE:-1}" \

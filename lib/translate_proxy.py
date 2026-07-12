@@ -108,6 +108,62 @@ def _update_active_modules():
 _update_active_modules()
 
 # ---------------------------------------------------------------------------
+# Stats persistence (survives container restart)
+# ---------------------------------------------------------------------------
+_stats_db: sqlite3.Connection | None = None
+_stats_db_lock = threading.Lock()
+
+def _ensure_stats_db() -> sqlite3.Connection:
+    global _stats_db
+    if _stats_db is not None:
+        return _stats_db
+    os.makedirs(CACHE_DIR, exist_ok=True)
+    _stats_db = sqlite3.connect(f"{CACHE_DIR}/stats.db", check_same_thread=False)
+    _stats_db.execute("PRAGMA journal_mode=WAL")
+    _stats_db.execute("""
+        CREATE TABLE IF NOT EXISTS stats (
+            key TEXT PRIMARY KEY,
+            value INTEGER NOT NULL
+        )
+    """)
+    _stats_db.commit()
+    return _stats_db
+
+def _load_lifetime_stats() -> dict:
+    """Load persisted stats from disk. Returns dict of key->value."""
+    try:
+        db = _ensure_stats_db()
+        rows = db.execute("SELECT key, value FROM stats").fetchall()
+        return {row[0]: row[1] for row in rows}
+    except Exception:
+        return {}
+
+def _save_lifetime_stats(session: ModuleStats) -> None:
+    """Merge session stats into persisted lifetime stats."""
+    try:
+        db = _ensure_stats_db()
+        with _stats_db_lock:
+            fields = [
+                "total_requests", "cache_hits", "cache_misses",
+                "summaries", "reroutes", "strips_system", "strips_tools",
+                "strips_response", "translates_in", "translates_out",
+                "sse_passthrough", "chars_reduced",
+            ]
+            for field in fields:
+                val = getattr(session, field)
+                db.execute(
+                    "INSERT INTO stats(key, value) VALUES (?, ?) "
+                    "ON CONFLICT(key) DO UPDATE SET value = value + ?",
+                    (field, val, val),
+                )
+            db.commit()
+    except Exception:
+        pass
+
+# Load lifetime stats on startup
+_lifetime = _load_lifetime_stats()
+
+# ---------------------------------------------------------------------------
 # Language detection & translation (translate module)
 # ---------------------------------------------------------------------------
 PT_PATTERNS = re.compile(
@@ -791,6 +847,9 @@ def process_request(body: bytes) -> tuple[bytes, dict | None]:
 
     with _stats_lock:
         _stats.total_requests += 1
+        # Persist to disk every 10 requests (avoid write amplification)
+        if _stats.total_requests % 10 == 0:
+            _save_lifetime_stats(_stats)
 
     return json.dumps(data, ensure_ascii=False).encode("utf-8"), None
 
@@ -940,6 +999,17 @@ DASHBOARD_HTML = """<!DOCTYPE html>
     </div>
   </div>
 
+  <div class="grid" style="margin-top: 0.5rem;">
+    <div class="kpi" style="border-left-color: var(--ifood-wine);">
+      <h3>Lifetime Requests</h3>
+      <div class="value" style="font-size: 1.4rem;">__LIFETIME_REQUESTS__</div>
+    </div>
+    <div class="kpi" style="border-left-color: var(--ifood-wine);">
+      <h3>Lifetime Chars Reduzidos</h3>
+      <div class="value" style="font-size: 1.4rem;">__LIFETIME_CHARS__<span class="unit"> chars</span></div>
+    </div>
+  </div>
+
   <table>
     <thead>
       <tr><th>Módulo</th><th>Ativações</th><th>Detalhe</th></tr>
@@ -961,6 +1031,13 @@ DASHBOARD_HTML = """<!DOCTYPE html>
 def build_dashboard() -> bytes:
     with _stats_lock:
         s = _stats
+
+    # Merge session + lifetime
+    lt = _lifetime.copy()
+    for field in ["total_requests", "cache_hits", "cache_misses", "summaries", "reroutes",
+                   "strips_system", "strips_tools", "strips_response", "translates_in",
+                   "translates_out", "sse_passthrough", "chars_reduced"]:
+        lt[field] = lt.get(field, 0) + getattr(s, field)
 
     cache = cache_stats()
     hit_rate = 0
@@ -987,7 +1064,6 @@ def build_dashboard() -> bytes:
         rows += f"<tr><td>{name}</td><td>{count}</td><td>{detail}</td></tr>"
 
     html = DASHBOARD_HTML
-    # Unescape CSS braces (doubled in source to avoid .format() conflicts)
     html = html.replace("{{", "{").replace("}}", "}")
     html = html.replace("__MODULES__", modules_html)
     html = html.replace("__TOTAL_REQUESTS__", str(s.total_requests))
@@ -995,6 +1071,8 @@ def build_dashboard() -> bytes:
     html = html.replace("__CACHE_HIT_RATE__", str(hit_rate))
     html = html.replace("__CACHE_ENTRIES__", str(cache["entries"]))
     html = html.replace("__MODULE_ROWS__", rows)
+    html = html.replace("__LIFETIME_REQUESTS__", f"{lt['total_requests']:,}")
+    html = html.replace("__LIFETIME_CHARS__", f"{lt['chars_reduced']:,}")
     return html.encode()
 
 
