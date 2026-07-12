@@ -828,7 +828,7 @@ DASHBOARD_HTML = """<!DOCTYPE html>
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>Token Saver · iFood Pago SRE</title>
+<title>Token Saver · iFood SRE</title>
 <style>
   :root {{
     --ifood-red: #EA1D2C;
@@ -915,7 +915,7 @@ DASHBOARD_HTML = """<!DOCTYPE html>
 
 <div class="header">
   <h1>Token Saver</h1>
-  <p class="subtitle">Pipeline modular de redução de tokens · iFood Pago SRE</p>
+  <p class="subtitle">Pipeline modular de redução de tokens · iFood SRE</p>
 </div>
 
 <div class="main">
@@ -949,7 +949,7 @@ DASHBOARD_HTML = """<!DOCTYPE html>
 </div>
 
 <div class="footer">
-  <span class="brand">· iFood Pago SRE</span>
+  <span class="brand">· iFood SRE</span>
   <span class="refresh">Atualiza a cada 5s</span>
 </div>
 
