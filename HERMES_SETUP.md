@@ -1,16 +1,21 @@
 # Hermes + Token Saver — Guia de uso
 
-Última atualização: 2026-07-12 (rodada 3 — 7 módulos estáveis)
+Última atualização: 2026-07-12 (v1.0 — 7 módulos, 3 plataformas)
 
-## Pré-requisitos
+## Instalação (uma vez)
 
 ```sh
-which hermes-token-saver token-saver-ctl
-podman image ls | grep -E "headroom|translate|mitmproxy"
-
-# Instalar (uma vez):
-cd ~/token-saver-wrappers && ./build-and-install
+git clone https://github.com/GeorgeLopes/token-saver-wrappers.git ~/token-saver-wrappers
+cd ~/token-saver-wrappers
+./install.sh
 ```
+
+O instalador detecta o OS e configura tudo. Para instruções detalhadas por plataforma, veja [PLATFORMS.md](PLATFORMS.md).
+
+**Plataformas suportadas:**
+- macOS (Apple Silicon / Intel)
+- Linux Ubuntu 22.04+
+- Windows 10/11 via WSL2
 
 ## Uso diário (atalhos)
 

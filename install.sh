@@ -15,21 +15,42 @@ echo ""
 command -v podman >/dev/null || { echo "ERRO: podman não encontrado. Instale com: brew install podman"; exit 1; }
 command -v python3 >/dev/null || { echo "ERRO: python3 não encontrado."; exit 1; }
 
-# Ensure podman machine is running (macOS)
-if [ "$(uname -s)" = "Darwin" ]; then
-    if ! podman machine inspect >/dev/null 2>&1; then
-        echo "[1/4] Criando podman machine (VM Linux)..."
-        podman machine init
-    fi
-    if [ "$(podman machine inspect --format '{{.State}}' 2>/dev/null)" != "running" ]; then
-        echo "[1/4] Iniciando podman machine..."
-        podman machine start
-    else
-        echo "[1/4] podman machine: OK"
-    fi
-else
-    echo "[1/4] Linux detectado: podman rootless"
-fi
+# --- OS detection ---
+OS="$(uname -s)"
+case "$OS" in
+    Darwin)
+        echo "[1/4] macOS detectado"
+        if ! podman machine inspect >/dev/null 2>&1; then
+            echo "       Criando podman machine (VM Linux)..."
+            podman machine init
+        fi
+        if [ "$(podman machine inspect --format '{{.State}}' 2>/dev/null)" != "running" ]; then
+            echo "       Iniciando podman machine..."
+            podman machine start
+        else
+            echo "       podman machine: OK"
+        fi
+        ;;
+    Linux)
+        echo "[1/4] Linux detectado"
+        # Rootless podman pre-flight
+        if ! podman run --rm docker.io/library/hello-world >/dev/null 2>&1; then
+            echo "       Verificando rootless podman..."
+            command -v newuidmap >/dev/null || {
+                echo "       Instale uidmap: sudo apt-get install -y uidmap"
+            }
+            if ! grep -q "^$(id -un):" /etc/subuid 2>/dev/null; then
+                echo "       Configure subuid/subgid: sudo usermod --add-subuids 100000-165535 --add-subgids 100000-165535 $(id -un)"
+            fi
+        fi
+        echo "       podman: OK"
+        ;;
+    *)
+        echo "ERRO: Sistema operacional não suportado: $OS"
+        echo "Use macOS, Linux, ou Windows via WSL2."
+        exit 1
+        ;;
+esac
 
 # --- Build images ---
 echo "[2/4] Construindo imagens..."
