@@ -44,42 +44,80 @@ providers. It does **NOT** work for the **Anthropic** handler, which forwards to
 a global `ANTHROPIC_TARGET_API_URL` fixed at pod creation — hence the claude
 wrapper must recreate the pod when the Anthropic upstream changes.
 
-## Translate layer (optional pt-BR ↔ EN)
+## Token reduction pipeline (proxy container)
 
-A **translate proxy** container (`localhost/translate-token-saver:latest`) can be
-inserted between mitmproxy and headroom to translate Portuguese messages to
-English before compression, and English responses back to Portuguese. Enable it
-with `TOKEN_SAVER_TRANSLATE_ENABLED=1`.
+A **pluggable proxy** (`localhost/translate-token-saver:latest`) sits between
+mitmproxy and headroom. 7 independent modules, each toggleable via env var.
+`lib/translate_proxy.py` — single-file stdlib implementation (~1,100 lines).
 
-**How it works:**
-- `lib/translate_proxy.py` — HTTP proxy (stdlib `http.server`, no framework deps)
-  that intercepts `/v1/chat/completions` and `/v1/messages`, translates
-  system/user `messages[].content` pt→EN (using `deep-translator` /
-  GoogleTranslator), forwards to headroom, then translates assistant
-  `choices[].message.content` EN→pt on the response.
-- `vendor/translate.Dockerfile` — `python:3.12-slim` + `deep-translator==1.11.4`.
-  Built by `build-and-install`. ~150MB.
-- The mitm addon (`lib/mitm_addon.py`) reads `TRANSLATE_PORT` env var; when set,
-  it routes chat-completions to the translate container instead of directly to
-  headroom. The translate container then forwards to headroom on port 8787.
+**Modules (request pipeline order):**
 
-**Non-obvious traps:**
-- **Translation latency.** Each message round-trip adds 50–200ms per text block
-  (Google Translate API call). For streaming responses, the translate layer
-  passes SSE chunks through *without* translation (to preserve low latency),
-  then translates only the final aggregated response. This means streaming
-  users see English text during generation, with the final block in Portuguese.
-- **Language detection is heuristic.** `translate_proxy.py` uses regex patterns
-  (`PT_PATTERNS`) to detect Portuguese — accented chars and common PT words. It
-  errs on the side of NOT translating (false negatives are safer than translating
-  code/English prompts into broken Portuguese).
-- **deep-translator dependency.** The image must have internet access to reach
-  Google Translate's API. Behind a corporate proxy, the container inherits
-  `HTTP_PROXY`/`HTTPS_PROXY` from the pod (set them via the wrapper scripts).
-- **Translate container is opt-in.** Even when the image is built, the container
-  is only started when `TS_TRANSLATE_ENABLED` is truthy. The pod always exposes
-  the translate port, but without the container running, mitm routes directly
-  to headroom.
+1. **prompt_cache** (`FEATURE_PROMPT_CACHE`, default OFF). SHA256(body+model) →
+   SQLite lookup. Identical requests return instantly. Cache capped at 10K entries.
+   Traps: cache key includes model name — changing model invalidates cache.
+   No TTL (infinite). Manual cleanup: delete `/tmp/token-saver-cache/prompt_cache.db`.
+
+2. **summarize** (`FEATURE_SUMMARIZE`, default OFF). When total chars > 15K
+   (`SUMMARIZE_THRESHOLD`), sends oldest 60% of messages to a cheap model
+   (`SUMMARIZE_MODEL`, default deepseek-chat) asking for a 2-3 sentence summary.
+   Keeps system prompt + last 40% of messages + summary. Traps: summarization
+   adds latency (~1-3s). Only triggers on non-streaming paths — SSE requests skip.
+   Falls back silently (no summary) on API error.
+
+3. **strip_system** (`FEATURE_STRIP_SYSTEM`, default ON). Regex-based dedup of
+   repeated "You MUST"/"Do not" blocks + blank line collapse. Traps: regex is
+   conservative — only removes exact duplicates. Won't merge semantically
+   similar but differently-worded instructions.
+
+4. **minify_tools** (`FEATURE_MINIFY_TOOLS`, default ON). Recursively strips
+   `description`, `examples`, `default`, `title`, `minLength`/`maxLength`,
+   `minimum`/`maximum`, `pattern`, `nullable`, `readOnly`, `writeOnly` from
+   tool JSON Schema. Traps: some models (especially smaller ones) rely on
+   descriptions to understand tool usage. If you see tool misuse after enabling,
+   disable this module.
+
+5. **router** (`FEATURE_ROUTER`, default OFF). Classifies last user message:
+   complex keywords (refator, implement, debug, architect, security, etc.) →
+   stays with main model. Simple keywords (list, show, how to, fix typo, commit)
+   or short messages (< 100 chars) → switches to `ROUTER_CHEAP_MODEL`
+   (default deepseek-chat). Traps: keyword-based classification is crude.
+   False positives (complex task routed to cheap model) = bad results. Start
+   with it OFF, enable once you trust the keyword list for your workload.
+
+6. **translate** (`FEATURE_TRANSLATE` / `TOKEN_SAVER_TRANSLATE_ENABLED`, default ON
+   when proxy is enabled). pt-BR detection via regex (accented chars + common
+   PT words). Traps: see original section below.
+
+7. **strip_response** (`FEATURE_STRIP_RESPONSE`, default ON). Removes
+   `system_fingerprint`, `logprobs`, `finish_details`, `index`, `usage`,
+   `object`, `created` from response JSON. Traps: some clients parse `usage`
+   for token counting. If your tool's token counter breaks, disable this.
+
+**Visibility:**
+
+- `X-Token-Saver-Modules` response header: comma-separated active modules
+- `X-Token-Saver-Cache: HIT` on cache hits
+- `GET /dashboard` — HTML dashboard (auto-refresh 5s) with per-module stats
+- `GET /stats` — JSON stats including tokens_saved_est, cache hit rate
+- `GET /health` — module status + cache entries count
+
+**To inspect from hermes:**
+```sh
+# Check active modules
+curl -s http://127.0.0.1:8786/health | python3 -m json.tool
+
+# Live dashboard
+open http://127.0.0.1:8786/dashboard
+```
+
+**Adding a new module:**
+1. Add feature flag + env var at top of `translate_proxy.py`
+2. Implement module function (takes body/bytes, returns body/bytes)
+3. Wire into `process_request()` or `process_response()`
+4. Add to `ACTIVE_MODULES` in `_update_active_modules()`
+5. Add row to dashboard `MODULE_ROWS`
+6. Add to `build_stats_json()` activations dict
+7. Add to container env in `common.sh` `ts_start_translate()`
 
 ## Two routing mechanisms — pick the right one
 

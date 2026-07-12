@@ -55,34 +55,77 @@ session ends (stop it with `token-saver-ctl stop`).
 ```
 pod "token-saver"
 ├── headroom   127.0.0.1:8787  (built from vendor/headroom-src.tar.gz)
-├── translate  127.0.0.1:8786  (pt-BR ↔ EN, optional — enable with TOKEN_SAVER_TRANSLATE_ENABLED=1)
+├── proxy      127.0.0.1:8786  (modular token reduction pipeline)
 └── mitm       127.0.0.1:8790  (mitmproxy sidecar)
 ```
 
-When the translate layer is enabled, the flow becomes:
+### Modular token reduction pipeline
+
+The proxy container runs a **pluggable pipeline** of token reduction modules.
+Each module is independently toggleable via `FEATURE_*` env vars. When the proxy
+is enabled (`TOKEN_SAVER_TRANSLATE_ENABLED=1`), these modules are active by
+default (except the heavy ones: summarizer, cache, router).
 
 ```
-tool → mitm → translate (pt→EN) → headroom (compress) → upstream
-tool ← mitm ← translate (EN→pt) ← headroom (unpack)  ← upstream
+tool → mitm → proxy pipeline → headroom (compress) → upstream
+                │
+                ├── REQUEST pipeline:
+                │   1. prompt_cache    SHA256(body) → stored response (off by default)
+                │   2. summarize       collapse old history into summary (off by default)
+                │   3. strip_system    dedup repeated instructions in system prompt
+                │   4. minify_tools    strip descriptions/defaults from tool JSON Schema
+                │   5. router          cheap model for simple queries (off by default)
+                │   6. translate       pt-BR → EN
+                │
+                └── RESPONSE pipeline:
+                    1. translate       EN → pt-BR
+                    2. strip_response  remove unused metadata fields
+                    3. prompt_cache    store response for future reuse
 ```
 
-The translate proxy sits between mitmproxy and headroom, translating
-system/user messages from Portuguese to English before compression (English
-compresses better) and translating assistant responses back to Portuguese.
-This is especially effective for tools like `hermes` that send/receive large
-contexts in Portuguese — fewer tokens after translation means lower API costs.
+| Module | Default | Env var | What it does |
+|---|---|---|---|
+| `translate` | ON | `TOKEN_SAVER_TRANSLATE_ENABLED=1` | pt-BR ↔ EN via Google Translate |
+| `strip_response` | ON | `FEATURE_STRIP_RESPONSE=1` | Remove `logprobs`, `system_fingerprint`, `usage` etc from responses |
+| `strip_system` | ON | `FEATURE_STRIP_SYSTEM=1` | Dedup repeated "You MUST" / "Do not" blocks in system prompts |
+| `minify_tools` | ON | `FEATURE_MINIFY_TOOLS=1` | Strip `description`, `default`, `examples` from tool JSON Schema |
+| `summarize` | OFF | `FEATURE_SUMMARIZE=1` | When history > 15K chars: collapse old messages into a 2-line summary |
+| `prompt_cache` | OFF | `FEATURE_PROMPT_CACHE=1` | Deterministic SHA256 cache — identical requests return instantly |
+| `router` | OFF | `FEATURE_ROUTER=1` | Classify query complexity → cheap model for simple tasks |
 
-**Enable translate:**
+**Enable the full pipeline:**
 ```sh
 export TOKEN_SAVER_TRANSLATE_ENABLED=1
+export FEATURE_SUMMARIZE=1
+export FEATURE_PROMPT_CACHE=1
+export FEATURE_ROUTER=1
 hermes-token-saver "faça uma code review do arquivo X"
 ```
 
-The translate layer uses [deep-translator](https://pypi.org/project/deep-translator/)
-(Google Translate backend) and is built as a separate lightweight container image
-(`localhost/translate-token-saver:latest`). It only activates for
-`/v1/chat/completions` and `/v1/messages` endpoints on intercepted hosts;
-all other traffic passes through unchanged.
+**Disable specific modules:**
+```sh
+export FEATURE_TRANSLATE=0        # disable translation only
+export FEATURE_MINIFY_TOOLS=0     # keep tool descriptions
+```
+
+### Visibility
+
+Every proxied response includes a header listing active modules:
+```
+X-Token-Saver-Modules: translate, strip_system, minify_tools, strip_response
+```
+
+**Dashboard:** `http://127.0.0.1:<proxy_port>/dashboard` — live HTML with:
+- Active modules (green/red pills)
+- Total requests, estimated tokens saved, cache hit rate
+- Per-module activation counters
+
+**Stats JSON:** `http://127.0.0.1:<proxy_port>/stats`
+
+To check in hermes what's active:
+```sh
+curl -s http://127.0.0.1:8786/health | python3 -m json.tool
+```
 
 The `pi`, `hermes`, and `opencode` wrappers use the **same mechanism**: a
 mitmproxy sidecar intercepts the known LLM API hosts and rewrites OpenAI-style
@@ -224,9 +267,17 @@ http://127.0.0.1:<port>/dashboard while the pod runs (the port is shown by
 | `TOKEN_SAVER_POD_NAME` | `token-saver` | podman pod name |
 | `TOKEN_SAVER_HEADROOM_PORT` | `8787` | headroom host port (127.0.0.1) |
 | `TOKEN_SAVER_MITM_PORT` | `8790` | mitm sidecar host port (127.0.0.1) |
-| `TOKEN_SAVER_TRANSLATE_PORT` | `8786` | translate proxy host port (127.0.0.1) |
-| `TOKEN_SAVER_TRANSLATE_ENABLED` | `0` | enable pt-BR ↔ EN translation layer (set to `1`) |
-| `TOKEN_SAVER_TRANSLATE_IMAGE` | `localhost/translate-token-saver:latest` | translate container image |
+| `TOKEN_SAVER_TRANSLATE_PORT` | `8786` | proxy host port (127.0.0.1) |
+| `TOKEN_SAVER_TRANSLATE_ENABLED` | `0` | enable token reduction pipeline (set to `1`) |
+| `TOKEN_SAVER_TRANSLATE_IMAGE` | `localhost/translate-token-saver:latest` | proxy container image |
+| `TOKEN_SAVER_FEATURE_STRIP_RESPONSE` | `1` | strip unused metadata from responses |
+| `TOKEN_SAVER_FEATURE_STRIP_SYSTEM` | `1` | dedup repeated system prompt blocks |
+| `TOKEN_SAVER_FEATURE_MINIFY_TOOLS` | `1` | strip tool JSON Schema descriptions |
+| `TOKEN_SAVER_FEATURE_SUMMARIZE` | `0` | collapse long conversation history |
+| `TOKEN_SAVER_FEATURE_PROMPT_CACHE` | `0` | deterministic SHA256 response cache |
+| `TOKEN_SAVER_FEATURE_ROUTER` | `0` | route simple queries to cheaper model |
+| `TOKEN_SAVER_SUMMARIZE_MODEL` | `deepseek-chat` | model for conversation summarization |
+| `TOKEN_SAVER_ROUTER_CHEAP_MODEL` | `deepseek-chat` | model for simple queries |
 | `TOKEN_SAVER_OPENAI_UPSTREAM` | `https://api.deepseek.com` | fallback upstream for OpenAI requests that lack an `x-headroom-base-url` header (normal traffic always carries one) |
 | `TOKEN_SAVER_PI_BIN` / `TOKEN_SAVER_HERMES_BIN` / `TOKEN_SAVER_OPENCODE_BIN` | from `PATH` (opencode also falls back to `~/.opencode/bin/opencode`) | real binary to exec |
 

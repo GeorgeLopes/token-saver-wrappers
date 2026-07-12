@@ -218,13 +218,23 @@ ts_start_translate() {
     fi
     podman image exists "$TS_TRANSLATE_IMAGE" \
         || ts_die "translate image $TS_TRANSLATE_IMAGE not found. Run build-and-install first."
-    ts_log "starting translate container (pt-BR ↔ EN)"
+    ts_log "starting translate container (pt-BR ↔ EN + token reduction pipeline)"
     ts_podman run -d --pod "$TS_POD" --name "${TS_POD}-translate" \
         --restart unless-stopped \
-        -e "TRANSLATE_ENABLED=1" \
+        -e "TRANSLATE_ENABLED=$TS_TRANSLATE_ENABLED" \
+        -e "FEATURE_TRANSLATE=$TS_TRANSLATE_ENABLED" \
+        -e "FEATURE_STRIP_RESPONSE=${TOKEN_SAVER_FEATURE_STRIP_RESPONSE:-1}" \
+        -e "FEATURE_STRIP_SYSTEM=${TOKEN_SAVER_FEATURE_STRIP_SYSTEM:-1}" \
+        -e "FEATURE_MINIFY_TOOLS=${TOKEN_SAVER_FEATURE_MINIFY_TOOLS:-1}" \
+        -e "FEATURE_SUMMARIZE=${TOKEN_SAVER_FEATURE_SUMMARIZE:-0}" \
+        -e "FEATURE_PROMPT_CACHE=${TOKEN_SAVER_FEATURE_PROMPT_CACHE:-0}" \
+        -e "FEATURE_ROUTER=${TOKEN_SAVER_FEATURE_ROUTER:-0}" \
+        -e "SUMMARIZE_MODEL=${TOKEN_SAVER_SUMMARIZE_MODEL:-deepseek-chat}" \
+        -e "ROUTER_CHEAP_MODEL=${TOKEN_SAVER_ROUTER_CHEAP_MODEL:-deepseek-chat}" \
         -e "TRANSLATE_LISTEN_PORT=$TS_TRANSLATE_INTERNAL_PORT" \
         -e "HEADROOM_PORT=$TS_HEADROOM_INTERNAL_PORT" \
         -e "HEADROOM_HOST=127.0.0.1" \
+        -e "CACHE_DIR=/tmp/token-saver-cache" \
         "$TS_TRANSLATE_IMAGE" >/dev/null
 }
 
